@@ -30,23 +30,26 @@ make -j12
 
 ## How to get the files required to run the emulator:
 
-The emulator requires files that I probably shouldn't share. Luckily, if you have an iPod Nano 3G, you can dump and decrypt these files yourself. More complete instructions will be added later. For now, these instructions are incomplete.
-
 ### BOOTROM
-Simply dump this with wInd3x from a real iPod Nano 3G. The emulator will make the required patches to get around the bootrom's security checks. The SHA1 of the bootrom is `6de08ee9e89d5a4ef59b629c903d4ceb828030f0`.
+Simply dump this with wInd3x from a real iPod Nano 5G. The emulator will make the required patches to get around the bootrom's security checks. The SHA256 of the bootrom is `e1d75912517026f492c7ad25d6d7671ce59e4caac365c049cc6ffddf3e47467e`.
 
 ### NOR and EFI Bootloader
-Given a full NOR dump and a decrypted EFI image, you can use:
 
-```
-./build_nor.sh nor_dump.bin /home/tucker/Development/n3g-emulator/efi.bin nor_image.bin
-```
+The iPod Nano 5G doesn't have a NOR chip, but it can still boot from NOR, and we do that because we don't yet have full NAND support.
+
+Download a firmware IPSW, look for `N33.bootloader.release.rb3.dec`, decrypt it using wInd3x. That's the bootloader we'll place into NOR. Mine has a SHA256 sum of `d6c3bd668f54f6718cbb2ad2916bc93d007cba53adea4935c680fbbd618ab5b2` but yours might differ (depending on the version and the decryption method used).
+
 
 ### NAND
-TODO
+
+lol, lmao even
 
 ## Other Notes
+
 Run it with:
+
 ```
-./arm-softmmu/qemu-system-arm -M iPod-Touch,bootrom=/home/tucker/Development/qemu-ipod-nano/build/s5l8702-bootrom.bin,iboot=/home/tucker/Development/qemu-ipod-nano/build/iboot_204_n45ap.bin,nand=/home/tucker/Development/qemu-ipod-nano/build/nand -serial mon:stdio -cpu max -m 1G -d unimp -pflash /home/tucker/Development/qemu-ipod-nano/build/nor_image.bin
+build/arm-softmmu/qemu-system-arm \
+    -M iPod-Nano3G,bootrom=bootrom.bin,bootloader=bootloader.bin \
+    -cpu arm1176 -d unimp
 ```

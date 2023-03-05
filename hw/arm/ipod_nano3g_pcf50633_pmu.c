@@ -63,14 +63,14 @@ static uint8_t pcf50633_recv(I2CSlave *i2c) {
             res = 0xFF;
     }
 
-    printf("Reading PMU register 0x%02x = 0x%02x\n", s->cmd, res);
+    //printf("Reading PMU register 0x%02x = 0x%02x\n", s->cmd, res);
 
     s->cmd += 1;
     return res;
 }
 
 static int pcf50633_send(I2CSlave *i2c, uint8_t data) {
-    printf("PMU pcf50633_send: %x\n", data);
+    //printf("PMU pcf50633_send: %x\n", data);
     Pcf50633State *s = PCF50633(i2c);
     s->cmd = data;
     return 0;

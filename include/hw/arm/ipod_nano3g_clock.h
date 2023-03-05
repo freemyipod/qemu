@@ -33,6 +33,7 @@ typedef struct IPodNano3GClockState
     uint32_t    pll2con;
     uint32_t    pll3con;
     uint32_t    plllock;
+    uint32_t    pllmode;
 
 } IPodNano3GClockState;
 

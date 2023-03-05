@@ -5,8 +5,20 @@ static void S5L8702_clock1_write(void *opaque, hwaddr addr, uint64_t val, unsign
     IPodNano3GClockState *s = (struct IPodNano3GClockState *) opaque;
 
     switch (addr) {
+        case CLOCK1_CONFIG0:
+            s->config0 = val;
+            break;
+        case CLOCK1_CONFIG1:
+            s->config1 = val;
+            break;
+        case CLOCK1_CONFIG2:
+            s->config2 = val;
+            break;
         case CLOCK1_PLLLOCK:
             s->plllock = val;
+            break;
+        case CLOCK1_PLLMODE:
+            //s->pllmode = val;
             break;
       default:
             break;
@@ -35,7 +47,7 @@ static uint64_t S5L8702_clock1_read(void *opaque, hwaddr addr, unsigned size)
         case CLOCK1_PLLLOCK:
             return s->plllock;
         case CLOCK1_PLLMODE:
-            return 0x000a003a; // extracted from iPod Touch
+            return s->pllmode;
       default:
             break;
     }
@@ -56,37 +68,43 @@ static void S5L8702_clock_init(Object *obj)
 
     s->plllock = 1 | 2 | 4 | 8;
 
+    // iPod Nano5G in-bootrom dump (wIndex):
+    // 3c500000: 00100040 40424000 00800080 00800080  ...@@B@.........
+    // 3c500010: 00800000 00800000 00000000 00000000  ................
+    // 3c500020: 016c0006 01480002 01480002 00000000  .l...H...H......
+    // 3c500030: 201c0000 00000000 00000000 00220000   ............"..
+    // 3c500040: 11000000 01000100 e31f1f00 f7afabff  ................
+    // 3c500050: 00000000 01000000 f5010000 00000000  ................
+    // 3c500060: 0a000000 00000000 ffd70300 ffffff06  ................
+    // 3c500070: 00000000 00000000 00000000 00000000  ................
+
+
+    // iPod Nano5G post-WTF dump (u-boot):
+    // => md.l 3c500000
+    // 3c500000: 40009000 00404040 80001014 c000c000  ...@@@@.........
+    // 3c500010: 0000c000 80008000 00000000 00000000  ................
+    // 3c500020: 0900ce01 02004801 02004801 00000000  .....H...H......
+    // 3c500030: 00028488 00000000 00000000 00000000  ................
+    // 3c500040: 00000011 00010001 001fa5c1 f42ae925  ............%.*.
+
     uint64_t config0 = 0x0;
-    config0 |= (1 << 12); // set the clock PPL to index 1
-    config0 |= (1 << 24); // indicate that we have a memory divisor
-    config0 |= (2 << 16); // set the memory divisor to two
+    config0 = 0x40001000;
     s->config0 = config0;
 
     uint64_t config1 = 0x0;
-    config1 |= (1 << 12); // set the bus PPL to index 1
-    config1 |= (1 << 24); // indicate that we have a bus divisor
-    config1 |= (3 << 16); // set the bus divisor to three
-    config1 |= (1 << 8);  // indicate that unknown has a divisor
-    config1 |= 3;         // set the unknown divisor 1 to 3
-    config1 |= (0 << 4);  // set the unknown divisor 2 to 0
-    config1 |= (1 << 20); // set the peripheral factor to 1
-
-    config1 |= (1 << 14); // unknown
-    config1 |= (1 << 28); // set some PPL index to 1
-    config1 |= (1 << 30); // unknown
+    config1 = 0x00404240;
     s->config1 = config1;
 
     uint64_t config2 = 0x0;
-    config2 |= (3 << 28); // set the peripheral PPL to index 3
-    config2 |= (1 << 24); // indicate that the display has a divisor
-    config2 |= (1 << 16); // set the display divisor to 1
+    config2 = 0x80008000;
     s->config2 = config2;
 
-    // set the PLL configurations (MDIV, PDIV, SDIV)
-    s->pll0con = (80 << 8) | (8 << 24) | 0;
-    s->pll1con = (103 << 8) | (6 << 24) | 0;
-    s->pll2con = (156 << 8) | (53 << 24) | 2;
-    s->pll3con = (72 << 8) | (8 << 24) | 1;
+    s->pll0con = 0x06006c01;
+    s->pll1con = 0x02004801;
+    s->pll2con = 0x02004801;
+    s->pll3con = 0x00000000;
+
+    s->pllmode = 0x00010001;
 
     memory_region_init_io(&s->iomem, obj, &clock1_ops, s, "clock", 0x1000);
 }

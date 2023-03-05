@@ -25,9 +25,10 @@ typedef struct IPodNano3GNORSPIState {
     uint32_t out_buf_size;
     uint32_t in_buf_cur_ind;
     uint32_t out_buf_cur_ind;
-    uint8_t *nor_data;
+    uint8_t *bootloader_data;
+    char *bootloader_path;
+    uint8_t *cur_data;
     uint32_t nor_read_ind;
-    char nor_path[1024];
     bool nor_initialized;
 } IPodNano3GNORSPIState;
 

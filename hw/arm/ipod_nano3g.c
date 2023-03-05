@@ -15,6 +15,41 @@
 #include "hw/dma/pl080.h"
 #include <openssl/aes.h>
 
+static uint64_t prng_workaround_read(void *opaque, hwaddr addr, unsigned size)
+{
+    switch (addr) {
+    case 0:
+        return 1<<2;
+    default:
+        return 0;
+    }
+}
+
+static void prng_workaround_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+{
+}
+
+static const MemoryRegionOps prng_workaround_ops = {
+    .read = prng_workaround_read,
+    .write = prng_workaround_write,
+    .endianness = DEVICE_NATIVE_ENDIAN,
+};
+
+static uint64_t pl301_workaround_read(void *opaque, hwaddr addr, unsigned size)
+{
+    return 0;
+}
+
+static void pl301_workaround_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
+{
+}
+
+static const MemoryRegionOps pl301_workaround_ops = {
+    .read = pl301_workaround_read,
+    .write = pl301_workaround_write,
+    .endianness = DEVICE_NATIVE_ENDIAN,
+};
+
 static uint64_t tvout_workaround_read(void *opaque, hwaddr addr, unsigned size)
 {
     return 0;
@@ -101,6 +136,9 @@ static uint64_t S5L8702_usb_phys_read(void *opaque, hwaddr addr, unsigned size)
     case 0x20: // OPHYTUNE
         return s->usb_ophytune;
 
+    case 0x28: // UCONDET
+        return s->usb_ucondet;
+
     default:
         fprintf(stderr, "%s: read invalid location 0x%08x\n", __func__, addr);
         return 0;
@@ -129,6 +167,10 @@ static void S5L8702_usb_phys_write(void *opaque, hwaddr addr, uint64_t val, unsi
 
     case 0x20: // OPHYTUNE
         s->usb_ophytune = val;
+        return;
+
+    case 0x28: // UCONDET
+        s->usb_ucondet = val;
         return;
 
     default:
@@ -182,7 +224,7 @@ static void ipod_nano3g_memory_setup(MachineState *machine, MemoryRegion *sysmem
     allocate_ram(sysmem, "sram1", SRAM1_MEM_BASE, 0x10000);
 
     // allocate UART ram
-    allocate_ram(sysmem, "ram", RAM_MEM_BASE, 0x8000000);
+    allocate_ram(sysmem, "ram", RAM_MEM_BASE, 0x08000000);
 
     // load the bootrom
     uint8_t *file_data = NULL;
@@ -190,18 +232,21 @@ static void ipod_nano3g_memory_setup(MachineState *machine, MemoryRegion *sysmem
     if (g_file_get_contents(nms->bootrom_path, (char **)&file_data, &fsize, NULL)) {
         // PATCHES
         // 1. do not verify the image header, just assume it's good to go (immediately return 1 from verify_img_header)
-        ((uint32_t*)file_data)[0x5dc/4] = 0xE3A00001;
-        ((uint32_t*)file_data)[0x5e0/4] = 0xE12FFF1E;
+        ((uint32_t*)file_data)[0x58c/4] = 0xE3A00001;
+        ((uint32_t*)file_data)[0x590/4] = 0xE12FFF1E;
         
         // 2. do the same for verify_decrypt_image (it's already decrypted off of NOR)
-        ((uint32_t*)file_data)[0x6dc/4] = 0xE3A00001;
-        ((uint32_t*)file_data)[0x6e0/4] = 0xE12FFF1E;
+        ((uint32_t*)file_data)[0x6c0/4] = 0xE3A00001;
+        ((uint32_t*)file_data)[0x6c4/4] = 0xE12FFF1E;
 
         allocate_ram(sysmem, "vrom", 0, 0x10000);
         address_space_rw(nsas, 0, MEMTXATTRS_UNSPECIFIED, (uint8_t *)file_data, fsize, 1);
 
         allocate_ram(sysmem, "vrom1", VROM_MEM_BASE, 0x10000);
         address_space_rw(nsas, VROM_MEM_BASE, MEMTXATTRS_UNSPECIFIED, (uint8_t *)file_data, fsize, 1);
+    } else {
+        printf("Failed to load bootrom.\n");
+        exit(1);
     }
 
     allocate_ram(sysmem, "llb", LLB_BASE, align_64k_high(0x400000));
@@ -219,18 +264,6 @@ static void ipod_nano3g_memory_setup(MachineState *machine, MemoryRegion *sysmem
     allocate_ram(sysmem, "framebuffer", FRAMEBUFFER_MEM_BASE, align_64k_high(4 * 320 * 480));
     uint8_t stuff[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     address_space_rw(nsas, FRAMEBUFFER_MEM_BASE, MEMTXATTRS_UNSPECIFIED, (uint8_t *)stuff, 16, 1);
-
-    // setup 1MB NOR
-    // nms->nor_drive = drive_get(IF_PFLASH, 0, 0);
-    // if (!nms->nor_drive) {
-    //     printf("A NOR image must be given with the -pflash parameter\n");
-    //     abort();
-    // }
-
-    // if(!pflash_cfi02_register(NOR_MEM_BASE, "nor", 1024 * 1024, nms->nor_drive ? blk_by_legacy_dinfo(nms->nor_drive) : NULL, 4096, 1, 2, 0x00bf, 0x273f, 0x0, 0x0, 0x555, 0x2aa, 0)) {
-    //     printf("Error registering NOR flash!\n");
-    //     abort();
-    // }
 }
 
 static char *ipod_nano3g_get_bootrom_path(Object *obj, Error **errp)
@@ -245,55 +278,25 @@ static void ipod_nano3g_set_bootrom_path(Object *obj, const char *value, Error *
     g_strlcpy(nms->bootrom_path, value, sizeof(nms->bootrom_path));
 }
 
-static char *ipod_nano3g_get_iboot_path(Object *obj, Error **errp)
+static char *ipod_nano3g_get_bootloader_path(Object *obj, Error **errp)
 {
     IPodNano3GMachineState *nms = IPOD_NANO3G_MACHINE(obj);
-    return g_strdup(nms->iboot_path);
+    return g_strdup(nms->bootloader_path);
 }
 
-static void ipod_nano3g_set_iboot_path(Object *obj, const char *value, Error **errp)
+static void ipod_nano3g_set_bootloader_path(Object *obj, const char *value, Error **errp)
 {
     IPodNano3GMachineState *nms = IPOD_NANO3G_MACHINE(obj);
-    g_strlcpy(nms->iboot_path, value, sizeof(nms->iboot_path));
-}
-
-static char *ipod_nano3g_get_nand_path(Object *obj, Error **errp)
-{
-    IPodNano3GMachineState *nms = IPOD_NANO3G_MACHINE(obj);
-    return g_strdup(nms->nand_path);
-}
-
-static void ipod_nano3g_set_nand_path(Object *obj, const char *value, Error **errp)
-{
-    IPodNano3GMachineState *nms = IPOD_NANO3G_MACHINE(obj);
-    g_strlcpy(nms->nand_path, value, sizeof(nms->nand_path));
-}
-
-static char *ipod_nano3g_get_nor_path(Object *obj, Error **errp)
-{
-    IPodNano3GMachineState *nms = IPOD_NANO3G_MACHINE(obj);
-    return g_strdup(nms->nor_path);
-}
-
-static void ipod_nano3g_set_nor_path(Object *obj, const char *value, Error **errp)
-{
-    IPodNano3GMachineState *nms = IPOD_NANO3G_MACHINE(obj);
-    g_strlcpy(nms->nor_path, value, sizeof(nms->nor_path));
+    g_strlcpy(nms->bootloader_path, value, sizeof(nms->bootloader_path));
 }
 
 static void ipod_nano3g_instance_init(Object *obj)
 {
 	object_property_add_str(obj, "bootrom", ipod_nano3g_get_bootrom_path, ipod_nano3g_set_bootrom_path);
-    object_property_set_description(obj, "bootrom", "Path to the S5L8702 bootrom binary");
+    object_property_set_description(obj, "bootrom", "Path to the S5L8730 bootrom binary");
 
-    object_property_add_str(obj, "iboot", ipod_nano3g_get_iboot_path, ipod_nano3g_set_iboot_path);
-    object_property_set_description(obj, "iboot", "Path to the iBoot binary");
-
-    object_property_add_str(obj, "nand", ipod_nano3g_get_nand_path, ipod_nano3g_set_nand_path);
-    object_property_set_description(obj, "nand", "Path to the NAND files");
-
-    object_property_add_str(obj, "nor", ipod_nano3g_get_nor_path, ipod_nano3g_set_nor_path);
-    object_property_set_description(obj, "nor", "Path to the iPod Nano 3G NOR image");
+    object_property_add_str(obj, "bootloader", ipod_nano3g_get_bootloader_path, ipod_nano3g_set_bootloader_path);
+    object_property_set_description(obj, "bootloader", "Path to the decrypted EFI bootloader");
 }
 
 static inline qemu_irq S5L8702_get_irq(IPodNano3GMachineState *s, int n)
@@ -468,7 +471,7 @@ static void ipod_nano3g_machine_init(MachineState *machine)
     set_spi_base(0);
     dev = sysbus_create_simple("S5L8702spi", SPI0_MEM_BASE, S5L8702_get_irq(nms, S5L8702_SPI0_IRQ));
     S5L8702SPIState *spi0_state = S5L8702SPI(dev);
-    strcpy(spi0_state->nor->nor_path, nms->nor_path);
+    spi0_state->nor->bootloader_path = nms->bootloader_path;
 
     set_spi_base(1);
     sysbus_create_simple("S5L8702spi", SPI1_MEM_BASE, S5L8702_get_irq(nms, S5L8702_SPI1_IRQ));
@@ -514,8 +517,10 @@ static void ipod_nano3g_machine_init(MachineState *machine)
     // init NAND flash
     dev = qdev_new("itnand");
     ITNandState *nand_state = ITNAND(dev);
-    nand_state->nand_path = &nms->nand_path;
+    nand_state->nand_path = "nope";
+    nand_state->downstream_as = nsas;
     nms->nand_state = nand_state;
+    //object_property_set_link(OBJECT(dev), "downstream", OBJECT(sysmem), &error_fatal);
     memory_region_add_subregion(sysmem, NAND_MEM_BASE, &nand_state->iomem);
 
     // init NAND ECC module
@@ -539,6 +544,7 @@ static void ipod_nano3g_machine_init(MachineState *machine)
     usb_state->usb_ophyclk = 0;
     usb_state->usb_orstcon = 0;
     usb_state->usb_ophytune = 0;
+    usb_state->usb_ucondet = 1;
 
     iomem = g_new(MemoryRegion, 1);
     memory_region_init_io(iomem, OBJECT(s), &usb_phys_ops, usb_state, "usbphys", 0x40);
@@ -546,6 +552,20 @@ static void ipod_nano3g_machine_init(MachineState *machine)
 
     // TODO: unknown peripheral at 0x38500000
     allocate_ram(sysmem, "ipod.unknown", 0x38500000, 0x2000);
+
+    // various bus control peripherals that the bootloader whishes to poke
+    allocate_ram(sysmem, "ipod.ahb", 0x38100000, 0x1000);
+    allocate_ram(sysmem, "ipod.miu", 0x3e000000, 0x1000);
+    allocate_ram(sysmem, "ipod.axi", 0x3d500000, 0x1000);
+    // pl301 is even worse, the bootloader reads from it
+    iomem = g_new(MemoryRegion, 1);
+    memory_region_init_io(iomem, OBJECT(nms), &pl301_workaround_ops, NULL, "pl301", 0x1000);
+    memory_region_add_subregion(sysmem, 0x3ff00000, iomem);
+    // prng is similarly annoying
+    iomem = g_new(MemoryRegion, 1);
+    memory_region_init_io(iomem, OBJECT(nms), &prng_workaround_ops, NULL, "prng", 0x1000);
+    memory_region_add_subregion(sysmem, 0x3c100000, iomem);
+
 
     // contains some constants
     // data = malloc(4);
@@ -610,6 +630,12 @@ static void ipod_nano3g_machine_init(MachineState *machine)
     sysbus_connect_irq(busdev, 0, S5L8702_get_irq(nms, S5L8702_ADM_IRQ));
     memory_region_add_subregion(sysmem, MPVD_MEM_BASE, &jpeg_state->iomem);
 
+    // Init DRAM Express (DREX) controller
+    dev = qdev_new("ipodnano5g.drex");
+    IPodNano5GDREXState *drex_state = IPOD_NANO5G_DREX(dev);
+    nms->drex_state = drex_state;
+    memory_region_add_subregion(sysmem, DREX_MEM_BASE, &drex_state->iomem);
+
     // init MBX
     // iomem = g_new(MemoryRegion, 1);
     // memory_region_init_io(iomem, OBJECT(nms), &mbx_ops, NULL, "mbx", 0x1000000);
@@ -658,7 +684,7 @@ static void ipod_nano3g_machine_class_init(ObjectClass *obj, void *data)
     mc->desc = "iPod Touch";
     mc->init = ipod_nano3g_machine_init;
     mc->max_cpus = 1;
-    mc->default_cpu_type = ARM_CPU_TYPE_NAME("arm926ej-s");
+    mc->default_cpu_type = ARM_CPU_TYPE_NAME("arm1176");
 }
 
 static const TypeInfo ipod_nano3g_machine_info = {

@@ -64,7 +64,7 @@ static void S5L8702_lcd_write(void *opaque, hwaddr addr, uint64_t val, unsigned 
             break;
         case LCD_WCMD:
             s->lcd_wcmd = val;
-            if(val < 0x2A || val > 0x2C) printf("LCD Got Command 0x%08x\n", s->lcd_wcmd);
+            //if(val < 0x2A || val > 0x2C) printf("LCD Got Command 0x%08x\n", s->lcd_wcmd);
             switch(s->lcd_wcmd) {
                 case 0x04:
                     fifo8_reset(s->dbuff_buf);
@@ -110,19 +110,19 @@ static void S5L8702_lcd_write(void *opaque, hwaddr addr, uint64_t val, unsigned 
             s->lcd_wdata = val;
             switch(s->lcd_wcmd) {
             case 0x2A:
-                printf("LCD GOT 0x2A: %04x\n", val);
+                //printf("LCD GOT 0x2A: %04x\n", val);
                 break;
             case 0x2B:
-                printf("LCD GOT 0x2B: %04x\n", val);
+                //printf("LCD GOT 0x2B: %04x\n", val);
                 break;
             case 0x2C:
                 address_space_rw(s->nsas, 0xfe00000 + s->memcnt, MEMTXATTRS_UNSPECIFIED, &val, 2, 1);
                 s->invalidate = true;
-                printf("FB writing %08x to %08x\n", val, s->memcnt);
+                //printf("FB writing %08x to %08x\n", val, s->memcnt);
                 s->memcnt += 2;
                 break;
             case 0x3A:
-                printf("LCD GOT 0x3A: %04x\n", val);
+                //printf("LCD GOT 0x3A: %04x\n", val);
                 break;
             default:
                 s->lcd_regs[s->lcd_wcmd] = s->lcd_regs[s->lcd_wcmd] << 8 | (val & 0xFF);
@@ -180,8 +180,8 @@ static void lcd_refresh(void *opaque)
 
     /* Resolution */
     first = last = 0;
-    width = 320;
-    height = 240;
+    width = 240;
+    height = 376;
     lcd->invalidate = 1;
 
     src_width =  2 * width;
@@ -251,7 +251,7 @@ static void S5L8702_lcd_realize(DeviceState *dev, Error **errp)
 {
     IPodNano3GLCDState *s = IPOD_NANO3G_LCD(dev);
     s->con = graphic_console_init(dev, 0, &S5L8702_gfx_ops, s);
-    qemu_console_resize(s->con, 320, 240);
+    qemu_console_resize(s->con, 240, 376);
 
     // add mouse handler
     // qemu_add_mouse_event_handler(ipod_nano3g_lcd_mouse_event, s, 1, "iPod Touch Touchscreen");
@@ -268,7 +268,7 @@ static void S5L8702_lcd_realize(DeviceState *dev, Error **errp)
     s->lcd_regs = g_malloc0(sizeof(uint64_t) * 0xFF);
 
     // initialize the lcd's internal framebuffer
-    s->framebuffer = g_malloc0(sizeof(uint16_t) * 320 * 240);
+    s->framebuffer = g_malloc0(sizeof(uint16_t) * 240 * 376);
 }
 
 static void S5L8702_lcd_init(Object *obj)

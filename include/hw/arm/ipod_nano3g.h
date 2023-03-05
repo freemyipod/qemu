@@ -26,6 +26,7 @@
 #include "hw/arm/ipod_nano3g_sdio.h"
 #include "hw/i2c/ipod_nano3g_i2c.h"
 #include "hw/arm/ipod_nano3g_jpeg.h"
+#include "hw/arm/ipod_nano5g_drex.h"
 #include "cpu.h"
 
 #define TYPE_IPOD_NANO3G "iPod-Nano3G"
@@ -121,6 +122,7 @@ const int S5L8702_GPIO_IRQS[7] = { S5L8702_GPIO_G0_IRQ, S5L8702_GPIO_G1_IRQ, S5L
 #define TVOUT3_MEM_BASE 0x39300000
 #define MPVD_MEM_BASE 0x39600000
 #define H264BPD_MEM_BASE 0x39800000
+#define DREX_MEM_BASE 0x3d700000
 
 #define TVOUT_WORKAROUND_MEM_BASE 0x8a25960  // workaround for TV Out, to make sure that it can be correctly deallocated without reverse engineering the entire TVOut protocol
 
@@ -134,6 +136,7 @@ typedef struct S5L8702_usb_phys_s
 	uint32_t usb_ophyclk;
 	uint32_t usb_orstcon;
 	uint32_t usb_ophytune;
+	uint32_t usb_ucondet;
 
 } S5L8702_usb_phys_s;
 
@@ -164,15 +167,14 @@ typedef struct {
 	IPodNano3GGPIOState *gpio_state;
 	IPodNano3GSDIOState *sdio_state;
 	S5L8702JPEGState *jpeg_state;
+	IPodNano5GDREXState *drex_state;
 	Clock *sysclk;
 	uint32_t kpc_pa;
 	uint32_t kbootargs_pa;
 	uint32_t uart_mmio_pa;
 	ARMCPU *cpu;
 	char bootrom_path[1024];
-	char iboot_path[1024];
-	char nand_path[1024];
-	char nor_path[1024];
+	char bootloader_path[1024];
 } IPodNano3GMachineState;
 
 #endif

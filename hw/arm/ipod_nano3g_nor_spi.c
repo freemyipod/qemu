@@ -4,9 +4,13 @@ static void initialize_nor(IPodNano3GNORSPIState *s)
 {
     unsigned long fsize;
     // TODO still hardcoded, string copy not working...
-    if (g_file_get_contents("/home/tucker/Development/qemu-ipod-nano/build/nor_image.bin", (char **)&s->nor_data, &fsize, NULL)) {
+    if (g_file_get_contents(s->bootloader_path, (char **)&s->bootloader_data, &fsize, NULL)) {
         s->nor_initialized = true;
+    } else {
+        printf("Could not read bootloader\n");
+        exit(1);
     }
+    s->cur_data = s->bootloader_data;
 }
 
 static uint32_t ipod_nano3g_nor_spi_transfer(SSIPeripheral *dev, uint32_t value)
@@ -71,7 +75,15 @@ static uint32_t ipod_nano3g_nor_spi_transfer(SSIPeripheral *dev, uint32_t value)
         } else if(s->cur_cmd == NOR_READ_DATA_CMD && s->in_buf_cur_ind == s->in_buf_size) {
             if(!s->nor_initialized) { initialize_nor(s); }
             s->nor_read_ind = (s->in_buf[1] << 16) | (s->in_buf[2] << 8) | s->in_buf[3];
-            printf("Reading from NOR @ 0x%08X\n", s->nor_read_ind);
+            printf("NOR read of %08x... ", s->nor_read_ind);
+            if ((s->nor_read_ind >= 0x8000) && s->nor_read_ind < (256<<10)) {
+                s->nor_read_ind -= 0x8000;
+                s->cur_data = s->bootloader_data;
+                printf("-> bootloader @ 0x%08X\n", s->nor_read_ind);
+            } else {
+                printf("???\n");
+                s->cur_data = NULL;
+            }
         }
 
         return 0x0;
@@ -80,7 +92,11 @@ static uint32_t ipod_nano3g_nor_spi_transfer(SSIPeripheral *dev, uint32_t value)
         uint8_t ret_val;
         // otherwise, we're outputting the response
         if(s->cur_cmd == NOR_READ_DATA_CMD) {
-            uint8_t ret_val = s->nor_data[s->nor_read_ind];
+            if (s->cur_data == NULL ) {
+                return 0;
+            }
+            // TODO: don't allow reading past the currently mapped file.
+            uint8_t ret_val = s->cur_data[s->nor_read_ind];
             s->nor_read_ind++;
             return ret_val;
         }
