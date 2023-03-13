@@ -10,7 +10,7 @@
 
 #define NAND_NUM_BANKS 8
 #define NAND_BYTES_PER_PAGE 2048
-#define NAND_BYTES_PER_SPARE 64
+#define NAND_BYTES_PER_SPARE 512
 
 #define NAND_CHIP_ID 0x7294D7EC
 //#define NAND_CHIP_ID 0xecd79472
@@ -22,9 +22,16 @@
 #define NAND_FMADDR1  0x10
 #define NAND_FMANUM   0x2C
 #define NAND_FMDNUM   0x30
+#define NAND_DMADEST  0x34
 #define NAND_FMCSTAT  0x48
+#define NAND_MEMFIFO_STAT  0x40
+#define NAND_MEMFIFO  0x60
 #define NAND_FMFIFO   0x80
 #define NAND_RSCTRL   0x100
+
+// FMSS__CS_IRQ 0xc0c (per osos n5g)
+// FMSS__CS_STATUS 0xc08 (per osos n5g)
+// FMSS__CS_BUF_RST_OK 0xc64 (per osos n5g)
 
 #define FMI_PROGRAM 0xc04
 #define FMI_INT 0xc0c
@@ -32,8 +39,18 @@
 #define FMI_DMEM 0xd00
 
 #define NAND_CMD_ID  0x90
+#define NAND_CMD_READ_PAGE 0
 #define NAND_CMD_READ 0x30
 #define NAND_CMD_READSTATUS 0x70
+
+#define NAND_FMCTRL0_BANKSEL_MASK 0b11111111
+#define NAND_FMCTRL0_BANKSEL_SHIFT 1
+#define NAND_FMCTRL0_SETUP_CLOCKS_MASK 0b111
+#define NAND_FMCTRL0_SETUP_CLOCKS_SHIFT 16
+#define NAND_FMCTRL0_HOLD_CLOCKS_MASK 0b111
+#define NAND_FMCTRL0_HOLD_CLOCKS_SHIFT 12
+#define NAND_FMCTRL0_EDO_CLOCKS_MASK 0b111
+#define NAND_FMCTRL0_EDO_CLOCKS_SHIFT 28
 
 #define FILESYSTEM_START_VPN 206851
 #define FILESYSTEM_NUM_PAGES 132854
@@ -53,6 +70,7 @@ typedef struct {
     AddressSpace *iomem;
 } fmiss_vm;
 
+#define NAND_MEMFIFO_SIZE 8
 typedef struct ITNandState {
     SysBusDevice busdev;
     MemoryRegion iomem;
@@ -64,6 +82,7 @@ typedef struct ITNandState {
     uint32_t fmdnum;
 	uint32_t rsctrl;
 	uint32_t cmd;
+    uint32_t memfifo[NAND_MEMFIFO_SIZE];
     uint32_t fmi_program;
     uint32_t fmi_int;
 	uint8_t reading_spare;

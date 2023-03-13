@@ -27,42 +27,70 @@ static bool fmiss_vm_step(void *opaque, fmiss_vm *vm) {
     uint8_t opcode = ins >> 24;
     uint8_t dst = ins >> 16;
     uint16_t src = ins;
-    printf("fmiss_vm: at %08x: %016lx (%02x %02x %04x %08x)\n", vm->pc - vm->start_pc, ins, opcode, dst, src, imm);
+
+    uint32_t addr, data;
+
+
+    printf("fmiss_vm: at %08x: %016lx (%02x %02x %04x %08x)",
+        vm->pc - vm->start_pc, ins, opcode, dst, src, imm);
+    for (int i = 0; i < 8; i++) {
+        printf(" %d:%08lx", i, vm->regs[i]);
+    }
+    printf("\n");
     switch (opcode) {
     case 0: // Terminate.
         return false;
     case 1: // Write immediate to memory.
-        //printf("fmiss_vm: reg %08x <- %08x\n", src, imm);
         itnand_write(opaque, src, imm, 4);
         break;
     case 2: // Write register to memory.
-        //printf("fmiss_vm: reg %08x <- %08x\n", src, vm->regs[dst%8]);
         itnand_write(opaque, src, vm->regs[dst%8], 4);
+        break;
+    case 3: // Read memory to register.
+        addr = vm->regs[src%8];
+        data = 0;
+        address_space_read(vm->iomem, addr, MEMTXATTRS_UNSPECIFIED, &data, 4);
+        printf("fmiss_vm: mem %08x -> %08x\n", addr, data);
+        vm->regs[dst%8] = data;
         break;
     case 4: // Read from memory into a register.
         uint32_t val = itnand_read(opaque, src, 4);
         vm->regs[dst%8] = val;
-        //printf("fmiss_vm: r[%d] <- %08x\n", dst%8, vm->regs[dst%8]);
         break;
     case 5: // Read immediate into register.
         vm->regs[dst%8] = imm;
-        //printf("fmiss_vm: r[%d] <- %08x\n", dst%8, vm->regs[dst%8]);
         break;
+    case 6: // Transfer register to register.
+        vm->regs[dst%8] = vm->regs[src%8];
     case 7: // Unknown, possibly wait for FMCSTAT. No-op.
         break;
+    case 10: // AND two registers and an immediate.
+        if (imm == 0) {
+            vm->regs[dst%8] &= vm->regs[src%8];
+        } else {
+            vm->regs[dst%8] = vm->regs[src%8] & imm;
+        }
+        break;
     case 11: // OR two registers and an immediate.
-        // This seems incorrect?
-        //vm->regs[dst%8] = vm->regs[dst%8] | vm->regs[src%8] | imm;
-        vm->regs[dst%8] = vm->regs[src%8] | imm;
-        //printf("fmiss_vm: r[%d] <- %08x\n", dst%8, vm->regs[dst%8]);
+        if (imm == 0) {
+            vm->regs[dst%8] |= vm->regs[src%8];
+        } else {
+            vm->regs[dst%8] = vm->regs[src%8] | imm;
+        }
         break;
     case 12: // Add an Immediate to a Register
-        vm->regs[dst%8] = vm->regs[src%8] + imm;
-        //printf("fmiss_vm: r[%d] <- %08x\n", dst%8, vm->regs[dst%8]);
+        if (imm == 0) {
+            vm->regs[dst%8] += vm->regs[src%8];
+        } else {
+            vm->regs[dst%8] = vm->regs[src%8] + imm;
+        }
         break;
     case 13: // Subtract an Immediate from a Register
-        vm->regs[dst%8] = vm->regs[src%8] - imm;
-        //printf("fmiss_vm: r[%d] <- %08x\n", dst%8, vm->regs[dst%8]);
+        if (imm == 0) {
+            vm->regs[dst%8] -= vm->regs[src%8];
+        } else {
+            vm->regs[dst%8] = vm->regs[src%8] - imm;
+        }
         break;
     case 14: // Jump If Not Equal.
         if (vm->regs[dst%8] != src) {
@@ -71,14 +99,24 @@ static bool fmiss_vm_step(void *opaque, fmiss_vm *vm) {
         }
         break;
     case 17: // Store a Register Value to a Memory Location Pointed to by a Register.
-        uint32_t addr = vm->regs[src%8];
-        uint32_t data = vm->regs[dst%8];
+        addr = vm->regs[src%8];
+        data = vm->regs[dst%8];
         printf("fmiss_vm: mem %08x <- %08x\n", addr, data);
         address_space_write(vm->iomem, addr, MEMTXATTRS_UNSPECIFIED, &data, 4);
         break;
     case 19: // Left Shift a Register by an Immediate
-        vm->regs[dst%8] = vm->regs[src%8] << imm;
-        //printf("fmiss_vm: r[%d] <- %08x\n", dst%8, vm->regs[dst%8]);
+        if (imm == 0) {
+            vm->regs[dst%8] <<= vm->regs[src%8];
+        } else {
+            vm->regs[dst%8] = vm->regs[src%8] << imm;
+        }
+        break;
+    case 20: // Right Shift a Register by an Immediate
+        if (imm == 0) {
+            vm->regs[dst%8] >>= vm->regs[src%8];
+        } else {
+            vm->regs[dst%8] = vm->regs[src%8] >> imm;
+        }
         break;
     case 23: // Jump if equal, but apparently not?
         if (vm->regs[dst%8] == src) {
@@ -153,6 +191,60 @@ void nand_set_buffered_page(ITNandState *s, uint32_t page) {
     }
 }
 
+static uint32_t itnand_fifo_read(void *opaque)
+{
+    ITNandState *s = (ITNandState *) opaque;
+    switch (s->cmd) {
+    case NAND_CMD_ID:
+        uint8_t bank = (s->fmctrl0 >> 1) & 0xff;
+        switch (bank) {
+        case 1:
+        case 2:
+            return NAND_CHIP_ID;
+        default:
+            return 0;
+        }
+    case NAND_CMD_READSTATUS:
+        return (1 << 6);
+    case NAND_CMD_READ_PAGE:
+        uint32_t read_val = 0;
+        if(s->reading_multiple_pages) {
+            // which bank are we at?
+            if(s->fmdnum % 0x800 == 0) {
+                s->cur_bank_reading += 1;
+                //printf("WILL TURN TO BANK %d (cnt: %d)\n", s->cur_bank_reading, s->fmdnum);
+                set_bank(s, s->banks_to_read[s->cur_bank_reading]);
+            }
+
+            // compute the offset in the page
+            uint32_t page_offset = s->fmdnum % 0x800;
+            if(page_offset == 0) { page_offset = 0x800; }
+            nand_set_buffered_page(s, s->pages_to_read[s->cur_bank_reading]);
+            //printf("Reading page %d\n", s->pages_to_read[s->cur_bank_reading]);
+            read_val = ((uint32_t *)s->page_buffer)[(NAND_BYTES_PER_PAGE - page_offset) / 4];
+            //printf("FMDNUM: %d, offset: %d\n", s->fmdnum, (NAND_BYTES_PER_PAGE - page_offset) / 4);
+            //printf("Page offset: %d, bytes: 0x%08x\n", page_offset, read_val);
+        }
+        else {
+            uint32_t page = (s->fmaddr1 << 16) | (s->fmaddr0 >> 16);
+            nand_set_buffered_page(s, page);
+
+            if(s->reading_spare) {
+                read_val = ((uint32_t *)s->page_spare_buffer)[(NAND_BYTES_PER_SPARE - s->fmdnum - 1) / 4];
+                printf("fmc: Reading spare page %d -> %08x\n", page, read_val);
+            } else {
+                read_val = ((uint32_t *)s->page_buffer)[(NAND_BYTES_PER_PAGE - s->fmdnum - 1) / 4];
+                printf("fmc: Reading page %d -> %08x\n", page, read_val);
+            }
+        }
+        s->fmdnum -= 4;
+        return read_val;
+    default:
+        printf("fmc: unhandled FIFO read with CMD: %08lx\n", s->cmd);
+        return 0xdeadbeef;
+    }
+}
+
 static uint64_t itnand_read(void *opaque, hwaddr addr, unsigned size)
 {
     ITNandState *s = (ITNandState *) opaque;
@@ -166,64 +258,18 @@ static uint64_t itnand_read(void *opaque, hwaddr addr, unsigned size)
         return s->fmiss_vm.dmem[i];
     }
 
+    if (addr >= NAND_MEMFIFO && addr <(NAND_MEMFIFO+NAND_MEMFIFO_SIZE*8)) {
+        uint32_t i = (addr - NAND_MEMFIFO)/4;
+        return s->memfifo[i];
+    }
+
     switch (addr) {
         case NAND_FMCTRL0:
             return s->fmctrl0;
         case NAND_FMCTRL1:
             return s->fmctrl1;
         case NAND_FMFIFO:
-            if(s->cmd == NAND_CMD_ID) {
-                return NAND_CHIP_ID;
-            }
-            else if(s->cmd == NAND_CMD_READSTATUS) {
-                return (1 << 6);
-            }
-            else {
-                uint32_t read_val = 0;
-                if(s->reading_multiple_pages) {
-                    // which bank are we at?
-                    if(s->fmdnum % 0x800 == 0) {
-                        s->cur_bank_reading += 1;
-                        //printf("WILL TURN TO BANK %d (cnt: %d)\n", s->cur_bank_reading, s->fmdnum);
-                        set_bank(s, s->banks_to_read[s->cur_bank_reading]);
-                    }
-
-                    // compute the offset in the page
-                    uint32_t page_offset = s->fmdnum % 0x800;
-                    if(page_offset == 0) { page_offset = 0x800; }
-                    nand_set_buffered_page(s, s->pages_to_read[s->cur_bank_reading]);
-                    //printf("Reading page %d\n", s->pages_to_read[s->cur_bank_reading]);
-                    read_val = ((uint32_t *)s->page_buffer)[(NAND_BYTES_PER_PAGE - page_offset) / 4];
-                    //printf("FMDNUM: %d, offset: %d\n", s->fmdnum, (NAND_BYTES_PER_PAGE - page_offset) / 4);
-                    //printf("Page offset: %d, bytes: 0x%08x\n", page_offset, read_val);
-                }
-                else {
-                    uint32_t page = (s->fmaddr1 << 16) | (s->fmaddr0 >> 16);
-                    nand_set_buffered_page(s, page);
-                    //printf("Reading page %d\n", page);
-
-                    if(s->reading_spare) {
-                        read_val = ((uint32_t *)s->page_spare_buffer)[(NAND_BYTES_PER_SPARE - s->fmdnum - 1) / 4];
-                    } else {
-                        read_val = ((uint32_t *)s->page_buffer)[(NAND_BYTES_PER_PAGE - s->fmdnum - 1) / 4];
-                    }
-                }
-                s->fmdnum -= 4;
-                return read_val;
-            }
-
-        case 0x60:
-            if (s->cmd == NAND_CMD_ID) {
-                uint8_t bank = s->fmctrl0 >> 1;
-                switch (bank) {
-                case 1:
-                case 2:
-                    return NAND_CHIP_ID;
-                default:
-                    return 0;
-                }
-            }
-            return 0xdeadbeef;
+            return itnand_fifo_read(opaque);
         case NAND_FMCSTAT:
             return (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 8) | (1 << 9) | (1 << 10) | (1 << 11) | (1 << 12); // this indicates that everything is ready, including our eight banks
         case NAND_RSCTRL:
@@ -239,7 +285,7 @@ static uint64_t itnand_read(void *opaque, hwaddr addr, unsigned size)
         default:
             break;
     }
-    printf("defaulting to 0\n");
+    printf("fmc: unhandled MMIO read %08lx\n", addr);
     return 0;
 }
 
@@ -264,20 +310,39 @@ static void itnand_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
             break;
         case NAND_FMCTRL1:
             s->fmctrl1 = val | (1<<30);
+            switch (val&0b111) {
+            case 0b001:
+                printf("fmc: fmctrl1: %08lx, addr tx\n", val);
+                break;
+            case 0b010:
+                printf("fmc: fmctrl1: %08lx, read tx\n", val);
+                break;
+            case 0b100:
+                printf("fmc: fmctrl1: %08lx, write tx\n", val);
+                break;
+            }
             break;
         case NAND_FMADDR0:
+            printf("fmc: fmaddr0: %08lx\n", val);
             s->fmaddr0 = val;
             break;
         case NAND_FMADDR1:
+            printf("fmc: fmaddr1: %08lx\n", val);
             s->fmaddr1 = val;
             break;
         case NAND_FMANUM:
+            printf("fmc: fmanum: %08lx\n", val);
             s->fmanum = val;
             break;
         case NAND_CMD:
+            printf("fmc: cmd: %02x\n", val);
             s->cmd = val;
             break;
+        case NAND_DMADEST:
+            printf("fmc: dmadest: %02x\n", val);
+            break;
         case NAND_FMDNUM:
+            printf("fmc: fmdnum: %d\n", val);
             if(val == NAND_BYTES_PER_SPARE - 1) {
                 s->reading_spare = 1;
             } else {
@@ -332,6 +397,18 @@ static void itnand_write(void *opaque, hwaddr addr, uint64_t val, unsigned size)
                 s->fmi_int |= 1;
             }
             break;
+        case  NAND_MEMFIFO_STAT:
+            if ((val & 2) == 2) {
+                uint32_t count = (val >> 6);
+                if (count > NAND_MEMFIFO_SIZE) {
+                    count = NAND_MEMFIFO_SIZE;
+                }
+                for (int i = 0; i < count; i++) {
+                    s->memfifo[i] = itnand_fifo_read(opaque);
+                    printf("fmc: memfifo read %d -> %08lx\n", i, s->memfifo[i]);
+                }
+            }
+            break;
         default:
             break;
     }
@@ -377,6 +454,9 @@ static void itnand_reset(DeviceState *d)
     s->fmi_int = 0;
     s->reading_spare = 0;
     s->buffered_page = -1;
+    for (int i = 0; i < NAND_MEMFIFO_SIZE; i++) {
+        s->memfifo[i] = 0;
+    }
 }
 
 static void itnand_class_init(ObjectClass *oc, void *data)
