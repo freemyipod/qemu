@@ -180,7 +180,7 @@ config AXP209_PMU
     bool
     depends on I2C
 
-config PCF50635
+config PCF5063X
     bool
     depends on I2C
 

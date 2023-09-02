@@ -88,7 +88,7 @@ config IPOD_CLASSIC
     bool
     select S5L8702
     select SSI_M25P80 # SPI flash
-    select PCF50635 # PMU
+    select PCF5063X # PMU
 
 config MAINSTONE
     bool

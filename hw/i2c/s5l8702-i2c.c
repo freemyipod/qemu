@@ -52,6 +52,7 @@ static uint64_t s5l8702_i2c_read(void *opaque, hwaddr offset,
         break;
     case S5L8702_I2C_IICSTAT:
         r = s->iicstat;
+        r &= ~S5L8702_I2C_IICSTAT_MODE_BB; // The virtualized i2c peripheral is never busy 😎
         printf("s5l8702_i2c_read: IICSTAT = 0x%08x\n", r);
         break;
     case S5L8702_I2C_IICADD:
@@ -94,22 +95,107 @@ static void s5l8702_i2c_write(void *opaque, hwaddr offset,
     switch (offset) {
     case S5L8702_I2C_IICCON:
         printf("s5l8702_i2c_write: IICCON = 0x%08x\n", (uint32_t) val);
+
+        // print ack_gen, cksel, int_en, irq, ck_reg
+        printf("s5l8702_i2c_write: IICCON: ACK_GEN = %d\n", (val & S5L8702_I2C_IICCON_ACK_GEN) >> 7);
+        printf("s5l8702_i2c_write: IICCON: CKSEL = %d\n", (val & S5L8702_I2C_IICCON_CKSEL) >> 6);
+        printf("s5l8702_i2c_write: IICCON: INT_EN = %d\n", (val & S5L8702_I2C_IICCON_IRQ) >> 4);
+        printf("s5l8702_i2c_write: IICCON: CK_REG = %d\n", (val & S5L8702_I2C_IICCON_CK_REG_MASK) >> 0);
+
+        if (val & S5L8702_I2C_IICCON_IRQ) {
+            val &= ~S5L8702_I2C_IICCON_IRQ;
+
+            if ((s->iicstat & 0xF0) == 0xF0) { // Resume TX
+                printf("s5l8702_i2c_write: IICCON: resume tx\n");
+                int ack = i2c_send(s->bus, (uint8_t) s->iicds);
+                printf("s5l8702_i2c_write: IICCON: ack = %d\n", ack);
+                if (ack) {
+                    s->iicstat |= 1; // Set NACK signal
+                } else {
+                    s->iicstat &= ~1; // Clear NACK signal
+                }
+                val |= S5L8702_I2C_IICCON_IRQ; // Set IRQ signal
+                s->iicstat2 |= BIT(8); // Set transfer done? CHECKME!
+            }
+
+            if ((s->iicstat & 0xF0) == 0xD0) { // Stop TX
+                printf("s5l8702_i2c_write: IICCON: stop tx\n");
+                i2c_end_transfer(s->bus);
+                val |= S5L8702_I2C_IICCON_IRQ; // Set IRQ signal
+                s->iicstat2 |= BIT(8); // Set transfer done? CHECKME!
+            }
+
+            if ((s->iicstat & 0xF0) == 0xB0) { // Resume RX
+                printf("s5l8702_i2c_write: IICCON: resume rx\n");
+                s->iicds = i2c_recv(s->bus);
+                printf("s5l8702_i2c_write: IICCON: data = 0x%02x\n", s->iicds);
+                s->iicstat &= ~1; // Clear NACK signal
+
+                val |= S5L8702_I2C_IICCON_IRQ; // Set IRQ signal
+                s->iicstat2 |= BIT(8); // Set transfer done? CHECKME!
+            }
+
+            if ((s->iicstat & 0xF0) == 0x90) { // Stop RX
+                printf("s5l8702_i2c_write: IICCON: stop rx\n");
+                i2c_end_transfer(s->bus);
+                val |= S5L8702_I2C_IICCON_IRQ; // Set IRQ signal
+                s->iicstat2 |= BIT(8); // Set transfer done? CHECKME!
+            }
+        }
+
         s->iiccon = (uint32_t) val;
         break;
     case S5L8702_I2C_IICSTAT:
         printf("s5l8702_i2c_write: IICSTAT = 0x%08x\n", (uint32_t) val);
+
+        printf("s5l8702_i2c_write: IICSTAT: MODE_SEL = 0x%02x\n", (uint8_t) ((val & S5L8702_I2C_IICSTAT_MODE_SEL_MASK) >> 6));
+        printf("s5l8702_i2c_write: IICSTAT: BB = %d\n", (val & S5L8702_I2C_IICSTAT_MODE_BB) >> 5);
+        printf("s5l8702_i2c_write: IICSTAT: SOE = %d\n", (val & S5L8702_I2C_IICSTAT_MODE_SOE) >> 4);
+
         if ((val & 0xF0) == 0xF0) {
-            printf("s5l8702_i2c_write: IICSTAT: start tx\n");
-            // i2c_start_send(s->bus, (uint8_t) (s->iicadd >> 1));
-            val &= ~S5L8702_I2C_IICSTAT_MODE_BB; // Clear busy signal
-            // FIXME: This should be done only after transfer is finished!
-            // s->iicstat2 |= BIT(8); // Set transfer done
+            printf("s5l8702_i2c_write: IICSTAT: start tx, slave address = 0x%02x\n", ((uint8_t) s->iicds) >> 1);
+            int ack = i2c_start_send(s->bus, ((uint8_t) s->iicds) >> 1);
+            printf("s5l8702_i2c_write: IICSTAT: ack = %d\n", ack);
+            if (ack) {
+                val |= S5L8702_I2C_IICSTAT_MODE_LRB; // Set NACK signal
+            } else {
+                val &= ~S5L8702_I2C_IICSTAT_MODE_LRB; // Clear NACK signal
+            }
+            s->iiccon |= S5L8702_I2C_IICCON_IRQ; // Set IRQ signal
+            s->iicstat2 |= BIT(8); // Set transfer done? CHECKME!
         }
+        
+        if ((val & 0xF0) == 0xD0) {
+            printf("s5l8702_i2c_write: IICSTAT: stop tx\n");
+            s->iiccon |= S5L8702_I2C_IICCON_IRQ; // Set IRQ signal
+            s->iicstat2 |= BIT(8); // Set transfer done? CHECKME!
+        }
+
+        if ((val & 0xF0) == 0xB0) {
+            printf("s5l8702_i2c_write: IICSTAT: start rx, slave address = 0x%02x\n", ((uint8_t) s->iicds) >> 1);
+            int ack = i2c_start_recv(s->bus, ((uint8_t) s->iicds) >> 1);
+            printf("s5l8702_i2c_write: IICSTAT: ack = %d\n", ack);
+            if (ack) {
+                val |= 1; // Set NACK signal
+            } else {
+                val &= ~1; // Clear NACK signal
+            }
+            s->iiccon |= S5L8702_I2C_IICCON_IRQ; // Set IRQ signal
+            s->iicstat2 |= BIT(8); // Set transfer done? CHECKME!
+        }
+        
+        if ((val & 0xF0) == 0x90) {
+            printf("s5l8702_i2c_write: IICSTAT: stop rx\n");
+            s->iiccon |= S5L8702_I2C_IICCON_IRQ; // Set IRQ signal
+            s->iicstat2 |= BIT(8); // Set transfer done? CHECKME!
+        }
+
         // FIXME: LBA, AAS, ADDR_ZERO and LRB are read-only
         s->iicstat = (uint32_t) val;
         break;
     case S5L8702_I2C_IICADD:
         printf("s5l8702_i2c_write: IICADD = 0x%08x\n", (uint32_t) val);
+        // TODO: Only writeable when serial output is disabled!
         s->iicadd = (uint32_t) val;
         break;
     case S5L8702_I2C_IICDS:
@@ -130,7 +216,7 @@ static void s5l8702_i2c_write(void *opaque, hwaddr offset,
         break;
     case S5L8702_I2C_IICSTAT2:
         printf("s5l8702_i2c_write: IICSTAT2 = 0x%08x\n", (uint32_t) val);
-        s->iicstat2 = (uint32_t) val;
+        s->iicstat2 &= ~(uint8_t) val;
         break;
     default:
         qemu_log_mask(LOG_UNIMP, "%s: unimplemented write (offset 0x%04x, value 0x%08x)\n",

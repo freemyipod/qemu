@@ -91,6 +91,11 @@ static void ipod_classic_machine_init(MachineState *machine)
     qemu_irq flash_cs = qdev_get_gpio_in_named(flash_dev, SSI_GPIO_CS, 0);
     qdev_connect_gpio_out(DEVICE(&s->soc.gpio), 0, flash_cs);
 
+    /* PCF5063x */
+    // object_initialize_child(OBJECT(s), "pcf5063x", &s->pcf5063x, TYPE_PCF5063X);
+    i2c_slave_create_simple(s->soc.i2c[0].bus, TYPE_PCF5063X, 0x73);
+    
+
     /* Read the bootrom, copy it to memory and execute it */
     assert(s->bootrom_path);
 
