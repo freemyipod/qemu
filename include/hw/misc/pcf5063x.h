@@ -7,16 +7,15 @@
 #define TYPE_PCF5063X    "pcf5063x"
 OBJECT_DECLARE_SIMPLE_TYPE(Pcf5063xState, PCF5063X)
 
-#define PCF5063X_NUM_REGS   64
-
 struct Pcf5063xState {
     /*< private >*/
     I2CSlave i2c;
 
-    /*< public >*/
-    enum i2c_event event;
-    uint8_t cmd;
-    uint8_t regs[PCF5063X_NUM_REGS];
+    /*< public >*/    
+    bool has_word;
+    uint8_t word;
+
+    uint8_t regs[0xFF];
 };
 
 #endif /* HW_MISC_PCF5063X_H */

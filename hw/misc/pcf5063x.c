@@ -114,31 +114,54 @@
 #define PCF5063X_MEMBYTE7   0x6E
 #define PCF5063X_DCDCPFM    0x84
 
+/* undocummented PMU registers */
+#define PCF50635_INT6       0x85
+#define PCF50635_INT6M      0x86
+#define PCF50635_GPIOSTAT   0x87
+
+static uint8_t pcf5063x_read(Pcf5063xState *s, uint8_t addr)
+{
+    uint8_t r = 0;
+
+    switch (addr) {
+        // The following registers are read at the startup, INTX are just to clear them
+    case PCF5063X_GPIO3CFG:
+    case PCF5063X_OOCSHDWN:
+    case PCF5063X_INT1:
+    case PCF5063X_INT2:
+    case PCF5063X_INT3:
+    case PCF5063X_INT4:
+    case PCF5063X_INT5:
+    case PCF50635_INT6:
+    default:
+        printf("pcf5063x_read: unknown addr %02x\n", addr);
+        r = s->regs[addr];
+        break;
+    }
+
+    printf("pcf5063x_read: reading addr %02x: %02x\n", addr, r);
+
+    return r;
+}
+
+static void pcf5063x_write(Pcf5063xState *s, uint8_t addr, uint8_t data)
+{
+    printf("pcf5063x_write: writing addr %02x: %02x\n", addr, data);
+
+    switch (addr) {
+    default:
+        printf("pcf5063x_write: unknown addr %02x\n", addr);
+        s->regs[addr] = data;
+        break;
+    }
+}
+
 static int pcf5063x_event(I2CSlave *slave, enum i2c_event event)
 {
     Pcf5063xState *s = PCF5063X(slave);
-    
-    switch (event) {
-    case I2C_START_RECV:
-        printf("pcf5063x_event: I2C_START_RECV\n");
-        break;
-    case I2C_START_SEND:
-        printf("pcf5063x_event: I2C_START_SEND\n");
-        break;
-    case I2C_START_SEND_ASYNC:
-        printf("pcf5063x_event: I2C_START_SEND_ASYNC\n");
-        break;
-    case I2C_FINISH:
-        printf("pcf5063x_event: I2C_FINISH\n");
-        break;
-    case I2C_NACK:
-        printf("pcf5063x_event: I2C_NACK\n");
-        break;
-    default:
-        printf("pcf5063x_event: unknown event %d\n", event);
-    }
 
-    s->event = event;
+    s->has_word = false;
+
     return 0;
 }
 
@@ -147,26 +170,8 @@ static uint8_t pcf5063x_recv(I2CSlave *slave)
     Pcf5063xState *s = PCF5063X(slave);
     uint8_t r = 0;
 
-    if (s->event != I2C_START_RECV) {
-        printf("pcf5063x_recv: unexpected event %d\n", s->event);
-        return 0;
-    }
-
-    printf("pcf5063x_recv: cmd = %02x\n", s->cmd);
-
-    switch (s->cmd) {
-    case PCF5063X_GPIO3CFG:
-        r = 0x00;
-        break;
-    case PCF5063X_OOCSHDWN:
-        r = 0x00;
-        break;
-    default:
-        printf("pcf5063x_recv: unknown cmd %02x\n", s->cmd);
-        break;
-    }
-
-    s->cmd++;
+    r = pcf5063x_read(s, s->word);
+    s->word++;
     
     return r;
 }
@@ -175,9 +180,15 @@ static int pcf5063x_send(I2CSlave *slave, uint8_t data)
 {
     Pcf5063xState *s = PCF5063X(slave);
     
-    printf("pcf5063x_send: %02x\n", data);
-
-    s->cmd = data;
+    if (!s->has_word) {
+        printf("pcf5063x_send: setting word %02x\n", data);
+        s->has_word = true;
+        s->word = data;
+    } else {
+        printf("pcf5063x_send: writing word %02x: %02x\n", s->word, data);
+        pcf5063x_write(s, s->word, data);
+        s->word++;
+    }
 
     return 0;
 }
@@ -186,10 +197,10 @@ static void pcf5063x_reset(DeviceState *dev)
 {
     Pcf5063xState *s = PCF5063X(dev);
 
-    printf("pcf5063x_reset\n");
-
     /* Reset registers */
     memset(s->regs, 0, sizeof(s->regs));
+
+    s->regs[PCF5063X_OOCSHDWN] = 0x08;
 }
 
 static void pcf5063x_class_init(ObjectClass *klass, void *data)

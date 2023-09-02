@@ -5,6 +5,12 @@
 #include "qemu/module.h"
 #include "hw/timer/s5l8702-timer.h"
 
+#if 0
+#define TIMER_LOG printf
+#else
+#define TIMER_LOG(...)
+#endif
+
 // 16-bit timer registers
 #define S5L8702_TIMER_TCON_16(x)    ((x) * 0x20 + 0x00)
 #define S5L8702_TIMER_TCMD_16(x)    ((x) * 0x20 + 0x04)
@@ -60,29 +66,29 @@ static void s5l8702_timer_clk_select(S5L8702Timer *t, uint32_t tcon, uint32_t tp
     if (tcon & S5L8702_TIMER_TCON_ECLK) {
         switch (tcon & S5L8702_TIMER_TCON_CS_MASK) {
         case S5L8702_TIMER_TCON_CS(0): // ECLK / 2
-            printf("%s: tcon->cs = ECLK / 2\n", __func__);
+            TIMER_LOG("%s: tcon->cs = ECLK / 2\n", __func__);
             // clock_set_mul_div(&t->eclk, 1, 2 * prescale);
             break;
         case S5L8702_TIMER_TCON_CS(1): // ECLK / 4
-            printf("%s: tcon->cs = ECLK / 4\n", __func__);
+            TIMER_LOG("%s: tcon->cs = ECLK / 4\n", __func__);
             // clock_set_mul_div(&t->eclk, 1, 4 * prescale);
             break;
         case S5L8702_TIMER_TCON_CS(2): // ECLK / 16
-            printf("%s: tcon->cs = ECLK / 16\n", __func__);
+            TIMER_LOG("%s: tcon->cs = ECLK / 16\n", __func__);
             // clock_set_mul_div(&t->eclk, 1, 16 * prescale);
             break;
         case S5L8702_TIMER_TCON_CS(3): // ECLK / 64
-            printf("%s: tcon->cs = ECLK / 64\n", __func__);
+            TIMER_LOG("%s: tcon->cs = ECLK / 64\n", __func__);
             // clock_set_mul_div(&t->eclk, 1, 64 * prescale);
             break;
         case S5L8702_TIMER_TCON_CS(4):
         case S5L8702_TIMER_TCON_CS(5): // External clock 0
-            printf("%s: tcon->cs = external clock 0\n", __func__);
+            TIMER_LOG("%s: tcon->cs = external clock 0\n", __func__);
             // clock_set_mul_div(&t->extclk0, 1, 1 * prescale);
             break;
         case S5L8702_TIMER_TCON_CS(6):
         case S5L8702_TIMER_TCON_CS(7): // External clock 1
-            printf("%s: tcon->cs = external clock 1\n", __func__);
+            TIMER_LOG("%s: tcon->cs = external clock 1\n", __func__);
             // clock_set_mul_div(&t->extclk1, 1, 1 * prescale);
             break;
         default: // Unsupported
@@ -91,29 +97,29 @@ static void s5l8702_timer_clk_select(S5L8702Timer *t, uint32_t tcon, uint32_t tp
     } else {
         switch (tcon & S5L8702_TIMER_TCON_CS_MASK) {
         case S5L8702_TIMER_TCON_CS(0): // PCLK / 2
-            printf("%s: tcon->cs = PCLK / 2\n", __func__);
+            TIMER_LOG("%s: tcon->cs = PCLK / 2\n", __func__);
             // clock_set_mul_div(&t->pclk, 1, 2 * prescale);
             break;
         case S5L8702_TIMER_TCON_CS(1): // PCLK / 4
-            printf("%s: tcon->cs = PCLK / 4\n", __func__);
+            TIMER_LOG("%s: tcon->cs = PCLK / 4\n", __func__);
             // clock_set_mul_div(&t->pclk, 1, 4 * prescale);
             break;
         case S5L8702_TIMER_TCON_CS(2): // PCLK / 16
-            printf("%s: tcon->cs = PCLK / 16\n", __func__);
+            TIMER_LOG("%s: tcon->cs = PCLK / 16\n", __func__);
             // clock_set_mul_div(&t->pclk, 1, 16 * prescale);
             break;
         case S5L8702_TIMER_TCON_CS(3): // PCLK / 64
-            printf("%s: tcon->cs = PCLK / 64\n", __func__);
+            TIMER_LOG("%s: tcon->cs = PCLK / 64\n", __func__);
             // clock_set_mul_div(&t->pclk, 1, 64 * prescale);
             break;
         case S5L8702_TIMER_TCON_CS(4):
         case S5L8702_TIMER_TCON_CS(5): // External clock 0
-            printf("%s: tcon->cs = external clock 0\n", __func__);
+            TIMER_LOG("%s: tcon->cs = external clock 0\n", __func__);
             // clock_set_mul_div(&t->extclk0, 1, 1 * prescale);
             break;
         case S5L8702_TIMER_TCON_CS(6):
         case S5L8702_TIMER_TCON_CS(7): // External clock 1
-            printf("%s: tcon->cs = external clock 1\n", __func__);
+            TIMER_LOG("%s: tcon->cs = external clock 1\n", __func__);
             // clock_set_mul_div(&t->extclk1, 1, 1 * prescale);
             break;
         default: // Unsupported
@@ -140,12 +146,12 @@ static void s5l8702_timer_mode_select(S5L8702Timer *t, uint32_t tcon) {
 }
 
 static void s5l8702_timer_clear(S5L8702Timer *t) {
-    printf("%s\n", __func__);
+    TIMER_LOG("%s\n", __func__);
     qemu_log_mask(LOG_UNIMP, "%s: unimplemented\n", __func__);
 }
 
 static void s5l8702_timer_enable(S5L8702Timer *t, uint32_t tcmd) {
-    printf("%s\n", __func__);
+    TIMER_LOG("%s\n", __func__);
     if (tcmd & S5L8702_TIMER_TCMD_EN) {
         qemu_log_mask(LOG_UNIMP, "%s: unimplemented tcmd->en\n", __func__);
     } else {
@@ -178,7 +184,7 @@ static uint64_t s5l8702_timer_read(void *opaque, hwaddr offset,
     case S5L8702_TIMER_TCON_32(6):
     case S5L8702_TIMER_TCON_32(7): {
         r = t->tcon;
-        printf("s5l8702_timer_read: tcon[%d] = 0x%08x\n", tidx, r);
+        TIMER_LOG("s5l8702_timer_read: tcon[%d] = 0x%08x\n", tidx, r);
         break;
     }
     case S5L8702_TIMER_TCMD_16(0):
@@ -190,7 +196,7 @@ static uint64_t s5l8702_timer_read(void *opaque, hwaddr offset,
     case S5L8702_TIMER_TCMD_32(6):
     case S5L8702_TIMER_TCMD_32(7): {
         r = t->tcmd;
-        printf("s5l8702_timer_read: tcmd[%d] = 0x%08x\n", tidx, r);
+        TIMER_LOG("s5l8702_timer_read: tcmd[%d] = 0x%08x\n", tidx, r);
         break;
     }
     case S5L8702_TIMER_TDATA0_16(0):
@@ -202,7 +208,7 @@ static uint64_t s5l8702_timer_read(void *opaque, hwaddr offset,
     case S5L8702_TIMER_TDATA0_32(6):
     case S5L8702_TIMER_TDATA0_32(7): {
         r = t->tdata0;
-        printf("s5l8702_timer_read: tdata0[%d] = 0x%08x\n", tidx, r);
+        TIMER_LOG("s5l8702_timer_read: tdata0[%d] = 0x%08x\n", tidx, r);
         break;
     }
     case S5L8702_TIMER_TDATA1_16(0):
@@ -214,7 +220,7 @@ static uint64_t s5l8702_timer_read(void *opaque, hwaddr offset,
     case S5L8702_TIMER_TDATA1_32(6):
     case S5L8702_TIMER_TDATA1_32(7): {
         r = t->tdata1;
-        printf("s5l8702_timer_read: tdata1[%d] = 0x%08x\n", tidx, r);
+        TIMER_LOG("s5l8702_timer_read: tdata1[%d] = 0x%08x\n", tidx, r);
         break;
     }
     case S5L8702_TIMER_TPRE_16(0):
@@ -226,7 +232,7 @@ static uint64_t s5l8702_timer_read(void *opaque, hwaddr offset,
     case S5L8702_TIMER_TPRE_32(6):
     case S5L8702_TIMER_TPRE_32(7): {
         r = t->tpre;
-        printf("s5l8702_timer_read: tpre[%d] = 0x%08x\n", tidx, r);
+        TIMER_LOG("s5l8702_timer_read: tpre[%d] = 0x%08x\n", tidx, r);
         break;
     }
     case S5L8702_TIMER_TCNT_16(0):
@@ -238,12 +244,12 @@ static uint64_t s5l8702_timer_read(void *opaque, hwaddr offset,
     case S5L8702_TIMER_TCNT_32(6):
     case S5L8702_TIMER_TCNT_32(7): {
         r = s5l8702_timer_get_cnt(t);
-        printf("s5l8702_timer_read: tcnt[%d] = 0x%08x\n", tidx, r);
+        TIMER_LOG("s5l8702_timer_read: tcnt[%d] = 0x%08x\n", tidx, r);
         break;
     }
     case S5L8702_TIMER_TSTAT: {
         r = s->tstat;
-        printf("s5l8702_timer_read: tstat = 0x%08x\n", r);
+        TIMER_LOG("s5l8702_timer_read: tstat = 0x%08x\n", r);
         break;
     }
     default:
@@ -273,7 +279,7 @@ static void s5l8702_timer_write(void *opaque, hwaddr offset,
     case S5L8702_TIMER_TCON_32(5):
     case S5L8702_TIMER_TCON_32(6):
     case S5L8702_TIMER_TCON_32(7): {
-        printf("s5l8702_timer_write: tcon[%d] = 0x%08x\n", tidx, (uint32_t) val);
+        TIMER_LOG("s5l8702_timer_write: tcon[%d] = 0x%08x\n", tidx, (uint32_t) val);
 
         // TCON_OUT is read-only
         val &= ~S5L8702_TIMER_TCON_OUT;
@@ -373,7 +379,7 @@ static void s5l8702_timer_write(void *opaque, hwaddr offset,
     case S5L8702_TIMER_TDATA0_32(5):
     case S5L8702_TIMER_TDATA0_32(6):
     case S5L8702_TIMER_TDATA0_32(7): {
-        printf("s5l8702_timer_write: tdata0[%d] = 0x%08x\n", tidx, (uint32_t) val);
+        TIMER_LOG("s5l8702_timer_write: tdata0[%d] = 0x%08x\n", tidx, (uint32_t) val);
         t->tdata0 = (uint32_t) val;
         break;
     }
@@ -385,7 +391,7 @@ static void s5l8702_timer_write(void *opaque, hwaddr offset,
     case S5L8702_TIMER_TDATA1_32(5):
     case S5L8702_TIMER_TDATA1_32(6):
     case S5L8702_TIMER_TDATA1_32(7): {
-        printf("s5l8702_timer_write: tdata1[%d] = 0x%08x\n", tidx, (uint32_t) val);
+        TIMER_LOG("s5l8702_timer_write: tdata1[%d] = 0x%08x\n", tidx, (uint32_t) val);
         t->tdata1 = (uint32_t) val;
         break;
     }
@@ -397,7 +403,7 @@ static void s5l8702_timer_write(void *opaque, hwaddr offset,
     case S5L8702_TIMER_TPRE_32(5):
     case S5L8702_TIMER_TPRE_32(6):
     case S5L8702_TIMER_TPRE_32(7): {
-        printf("s5l8702_timer_write: tpre[%d] = 0x%08x\n", tidx, (uint32_t) val);
+        TIMER_LOG("s5l8702_timer_write: tpre[%d] = 0x%08x\n", tidx, (uint32_t) val);
         s5l8702_timer_clk_select(t, t->tcon, (uint32_t) val);
         t->tpre = (uint32_t) val;
         break;
@@ -414,7 +420,7 @@ static void s5l8702_timer_write(void *opaque, hwaddr offset,
         break;
     }
     case S5L8702_TIMER_TSTAT: {
-        printf("s5l8702_timer_write: tstat = 0x%08x\n", (uint32_t) val);
+        TIMER_LOG("s5l8702_timer_write: tstat = 0x%08x\n", (uint32_t) val);
         s->tstat = (uint32_t) val;
         break;
     }
@@ -436,7 +442,7 @@ static void s5l8702_timer_realize(DeviceState *dev, Error **errp)
 {
     S5L8702TimerCtrlState *s = S5L8702_TIMER(dev);
 
-    printf("s5l8702_timer_realize\n");
+    TIMER_LOG("s5l8702_timer_realize\n");
 
     for (uint32_t i = 0; i < ARRAY_SIZE(s->timer); i++) {
         S5L8702Timer *t = &s->timer[i];
@@ -449,7 +455,7 @@ static void s5l8702_timer_reset(DeviceState *dev)
 {
     S5L8702TimerCtrlState *s = S5L8702_TIMER(dev);
 
-    printf("s5l8702_timer_reset\n");
+    TIMER_LOG("s5l8702_timer_reset\n");
 
     /* Reset registers */
     s->tstat = 0;
@@ -470,14 +476,14 @@ static void s5l8702_timer_tick(void *opaque)
 {
     S5L8702Timer *t = opaque;
 
-    printf("s5l8702_timer_tick\n");
+    TIMER_LOG("s5l8702_timer_tick\n");
 }
 
 static void s5l8702_timer_init(Object *obj)
 {
     S5L8702TimerCtrlState *s = S5L8702_TIMER(obj);
 
-    printf("s5l8702_timer_init\n");
+    TIMER_LOG("s5l8702_timer_init\n");
 
     /* Memory mapping */
     memory_region_init_io(&s->iomem, OBJECT(s), &s5l8702_timer_ops, s, TYPE_S5L8702_TIMER, S5L8702_TIMER_SIZE);

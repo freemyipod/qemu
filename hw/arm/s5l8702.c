@@ -127,6 +127,7 @@ static void s5l8702_realize(DeviceState *dev, Error **errp)
 
     create_unimplemented_device("unimplemented-mem", 0x0, 0xFFFFFFFF);
     create_unimplemented_device("wdt", 0x3c800000, 0x100000);
+    create_unimplemented_device("miu", 0x38100000, 0x100000);
 }
 
 static void s5l8702_class_init(ObjectClass *oc, void *data)
