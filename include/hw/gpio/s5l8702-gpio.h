@@ -27,6 +27,10 @@ struct S5L8702GpioState {
 
     uint8_t pcon[S5L8702_GPIO_PORTS];
     uint8_t pdat[S5L8702_GPIO_PORTS];
+    uint8_t puna[S5L8702_GPIO_PORTS];
+    uint8_t punb[S5L8702_GPIO_PORTS];
+    uint8_t punc[S5L8702_GPIO_PORTS];
+    uint8_t gpiocmd;
 };
 
 #endif /* HW_GPIO_S5L8702_GPIO_H */

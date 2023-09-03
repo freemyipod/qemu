@@ -128,6 +128,12 @@ static void s5l8702_realize(DeviceState *dev, Error **errp)
     create_unimplemented_device("unimplemented-mem", 0x0, 0xFFFFFFFF);
     create_unimplemented_device("wdt", 0x3c800000, 0x100000);
     create_unimplemented_device("miu", 0x38100000, 0x100000);
+    create_unimplemented_device("chipid", 0x3D100000, 0x100000); // I think so, at least
+    // 👇🏻 https://github.com/Rockbox/rockbox/blob/ed369e1d475658eccb5eb2221d757e7d66796e90/firmware/target/arm/s5l8702/clocking-s5l8702.h#L216
+    create_unimplemented_device("sm1_div", 0x38501000, 0x04);
+    create_unimplemented_device("phy", 0x3c400000, 0x100000);
+    create_unimplemented_device("vic", 0x38E00000, 0x100000);
+    create_unimplemented_device("unknown-dev-1", 0x39a00000, 0x100000);
 }
 
 static void s5l8702_class_init(ObjectClass *oc, void *data)

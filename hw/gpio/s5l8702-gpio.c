@@ -5,9 +5,12 @@
 #include "qemu/module.h"
 #include "hw/gpio/s5l8702-gpio.h"
 
-#define PCON(port)  (0x00000000 + (port << 5))
-#define PDAT(port)  (0x00000004 + (port << 5))
-#define GPIOCMD     0x00000200
+#define S5L8702_GPIO_PCON(port)  (0x00000000 + (port << 5))
+#define S5L8702_GPIO_PDAT(port)  (0x00000004 + (port << 5))
+#define S5L8702_GPIO_PUNA(port)  (0x00000008 + (port << 5))
+#define S5L8702_GPIO_PUNB(port)  (0x0000000C + (port << 5))
+#define S5L8702_GPIO_PUNC(port)  (0x00000010 + (port << 5))
+#define S5L8702_GPIO_GPIOCMD     0x00000200
 
 static uint64_t s5l8702_gpio_read(void *opaque, hwaddr offset,
                                       unsigned size)
@@ -17,42 +20,104 @@ static uint64_t s5l8702_gpio_read(void *opaque, hwaddr offset,
     uint8_t r = 0;
 
     switch (offset) {
-    case PCON(0):
-    case PCON(1):
-    case PCON(2):
-    case PCON(3):
-    case PCON(4):
-    case PCON(5):
-    case PCON(6):
-    case PCON(7):
-    case PCON(8):
-    case PCON(9):
-    case PCON(10):
-    case PCON(11):
-    case PCON(12):
-    case PCON(13):
-    case PCON(14):
-    case PCON(15):
+    case S5L8702_GPIO_PCON(0):
+    case S5L8702_GPIO_PCON(1):
+    case S5L8702_GPIO_PCON(2):
+    case S5L8702_GPIO_PCON(3):
+    case S5L8702_GPIO_PCON(4):
+    case S5L8702_GPIO_PCON(5):
+    case S5L8702_GPIO_PCON(6):
+    case S5L8702_GPIO_PCON(7):
+    case S5L8702_GPIO_PCON(8):
+    case S5L8702_GPIO_PCON(9):
+    case S5L8702_GPIO_PCON(10):
+    case S5L8702_GPIO_PCON(11):
+    case S5L8702_GPIO_PCON(12):
+    case S5L8702_GPIO_PCON(13):
+    case S5L8702_GPIO_PCON(14):
+    case S5L8702_GPIO_PCON(15):
         r = s->pcon[port];
+        printf("s5l8702_gpio_read: S5L8702_GPIO_PCON%d = 0x%08x\n", port, r);
         break;
-    case PDAT(0):
-    case PDAT(1):
-    case PDAT(2):
-    case PDAT(3):
-    case PDAT(4):
-    case PDAT(5):
-    case PDAT(6):
-    case PDAT(7):
-    case PDAT(8):
-    case PDAT(9):
-    case PDAT(10):
-    case PDAT(11):
-    case PDAT(12):
-    case PDAT(13):
-    case PDAT(14):
-    case PDAT(15):
+    case S5L8702_GPIO_PDAT(0):
+    case S5L8702_GPIO_PDAT(1):
+    case S5L8702_GPIO_PDAT(2):
+    case S5L8702_GPIO_PDAT(3):
+    case S5L8702_GPIO_PDAT(4):
+    case S5L8702_GPIO_PDAT(5):
+    case S5L8702_GPIO_PDAT(6):
+    case S5L8702_GPIO_PDAT(7):
+    case S5L8702_GPIO_PDAT(8):
+    case S5L8702_GPIO_PDAT(9):
+    case S5L8702_GPIO_PDAT(10):
+    case S5L8702_GPIO_PDAT(11):
+    case S5L8702_GPIO_PDAT(12):
+    case S5L8702_GPIO_PDAT(13):
+    case S5L8702_GPIO_PDAT(14):
+    case S5L8702_GPIO_PDAT(15):
         r = s->pdat[port];
+        printf("s5l8702_gpio_read: S5L8702_GPIO_PDAT%d = 0x%08x\n", port, r);
         break;
+    case S5L8702_GPIO_PUNA(0):
+    case S5L8702_GPIO_PUNA(1):
+    case S5L8702_GPIO_PUNA(2):
+    case S5L8702_GPIO_PUNA(3):
+    case S5L8702_GPIO_PUNA(4):
+    case S5L8702_GPIO_PUNA(5):
+    case S5L8702_GPIO_PUNA(6):
+    case S5L8702_GPIO_PUNA(7):
+    case S5L8702_GPIO_PUNA(8):
+    case S5L8702_GPIO_PUNA(9):
+    case S5L8702_GPIO_PUNA(10):
+    case S5L8702_GPIO_PUNA(11):
+    case S5L8702_GPIO_PUNA(12):
+    case S5L8702_GPIO_PUNA(13):
+    case S5L8702_GPIO_PUNA(14):
+    case S5L8702_GPIO_PUNA(15):
+        r = s->puna[port];
+        printf("s5l8702_gpio_read: S5L8702_GPIO_PUNA%d = 0x%08x\n", port, r);
+        break;
+    case S5L8702_GPIO_PUNB(0):
+    case S5L8702_GPIO_PUNB(1):
+    case S5L8702_GPIO_PUNB(2):
+    case S5L8702_GPIO_PUNB(3):
+    case S5L8702_GPIO_PUNB(4):
+    case S5L8702_GPIO_PUNB(5):
+    case S5L8702_GPIO_PUNB(6):
+    case S5L8702_GPIO_PUNB(7):
+    case S5L8702_GPIO_PUNB(8):
+    case S5L8702_GPIO_PUNB(9):
+    case S5L8702_GPIO_PUNB(10):
+    case S5L8702_GPIO_PUNB(11):
+    case S5L8702_GPIO_PUNB(12):
+    case S5L8702_GPIO_PUNB(13):
+    case S5L8702_GPIO_PUNB(14):
+    case S5L8702_GPIO_PUNB(15):
+        r = s->punb[port];
+        printf("s5l8702_gpio_read: S5L8702_GPIO_PUNB%d = 0x%08x\n", port, r);
+        break;
+    case S5L8702_GPIO_PUNC(0):
+    case S5L8702_GPIO_PUNC(1):
+    case S5L8702_GPIO_PUNC(2):
+    case S5L8702_GPIO_PUNC(3):
+    case S5L8702_GPIO_PUNC(4):
+    case S5L8702_GPIO_PUNC(5):
+    case S5L8702_GPIO_PUNC(6):
+    case S5L8702_GPIO_PUNC(7):
+    case S5L8702_GPIO_PUNC(8):
+    case S5L8702_GPIO_PUNC(9):
+    case S5L8702_GPIO_PUNC(10):
+    case S5L8702_GPIO_PUNC(11):
+    case S5L8702_GPIO_PUNC(12):
+    case S5L8702_GPIO_PUNC(13):
+    case S5L8702_GPIO_PUNC(14):
+    case S5L8702_GPIO_PUNC(15):
+        r = s->punc[port];
+        printf("s5l8702_gpio_read: S5L8702_GPIO_PUNC%d = 0x%08x\n", port, r);
+        break;
+    case S5L8702_GPIO_GPIOCMD:
+        r = s->gpiocmd;
+        printf("s5l8702_gpio_read: S5L8702_GPIO_GPIOCMD = 0x%08x\n", r);
     default:
         qemu_log_mask(LOG_UNIMP, "%s: unimplemented read (offset 0x%04x)\n",
                       __func__, (uint32_t) offset);
@@ -68,50 +133,108 @@ static void s5l8702_gpio_write(void *opaque, hwaddr offset,
     const uint32_t port = offset >> 5;
 
     switch (offset) {
-    case PCON(0):
-    case PCON(1):
-    case PCON(2):
-    case PCON(3):
-    case PCON(4):
-    case PCON(5):
-    case PCON(6):
-    case PCON(7):
-    case PCON(8):
-    case PCON(9):
-    case PCON(10):
-    case PCON(11):
-    case PCON(12):
-    case PCON(13):
-    case PCON(14):
-    case PCON(15):
-        printf("s5l8702_gpio_write: PCON (port %d) = 0x%08x\n", port, (uint32_t) val);
+    case S5L8702_GPIO_PCON(0):
+    case S5L8702_GPIO_PCON(1):
+    case S5L8702_GPIO_PCON(2):
+    case S5L8702_GPIO_PCON(3):
+    case S5L8702_GPIO_PCON(4):
+    case S5L8702_GPIO_PCON(5):
+    case S5L8702_GPIO_PCON(6):
+    case S5L8702_GPIO_PCON(7):
+    case S5L8702_GPIO_PCON(8):
+    case S5L8702_GPIO_PCON(9):
+    case S5L8702_GPIO_PCON(10):
+    case S5L8702_GPIO_PCON(11):
+    case S5L8702_GPIO_PCON(12):
+    case S5L8702_GPIO_PCON(13):
+    case S5L8702_GPIO_PCON(14):
+    case S5L8702_GPIO_PCON(15):
+        printf("s5l8702_gpio_write: S5L8702_GPIO_PCON%d = 0x%08x\n", port, (uint32_t) val);
         s->pcon[port] = (uint8_t) val;
         break;
-    case PDAT(0):
-    case PDAT(1):
-    case PDAT(2):
-    case PDAT(3):
-    case PDAT(4):
-    case PDAT(5):
-    case PDAT(6):
-    case PDAT(7):
-    case PDAT(8):
-    case PDAT(9):
-    case PDAT(10):
-    case PDAT(11):
-    case PDAT(12):
-    case PDAT(13):
-    case PDAT(14):
-    case PDAT(15):
-        printf("s5l8702_gpio_write: PDAT (port %d) = 0x%08x\n", port, (uint32_t) val);
+    case S5L8702_GPIO_PDAT(0):
+    case S5L8702_GPIO_PDAT(1):
+    case S5L8702_GPIO_PDAT(2):
+    case S5L8702_GPIO_PDAT(3):
+    case S5L8702_GPIO_PDAT(4):
+    case S5L8702_GPIO_PDAT(5):
+    case S5L8702_GPIO_PDAT(6):
+    case S5L8702_GPIO_PDAT(7):
+    case S5L8702_GPIO_PDAT(8):
+    case S5L8702_GPIO_PDAT(9):
+    case S5L8702_GPIO_PDAT(10):
+    case S5L8702_GPIO_PDAT(11):
+    case S5L8702_GPIO_PDAT(12):
+    case S5L8702_GPIO_PDAT(13):
+    case S5L8702_GPIO_PDAT(14):
+    case S5L8702_GPIO_PDAT(15):
+        printf("s5l8702_gpio_write: S5L8702_GPIO_PDAT%d = 0x%08x\n", port, (uint32_t) val);
         s->pdat[port] = (uint8_t) val;
         for (int i = 0; i < 8; i++) {
             qemu_set_irq(s->output[port * 8 + i], (s->pdat[port] >> i) & 1);
         }
         break;
-    // case GPIOCMD:
-
-    //     break;
+    case S5L8702_GPIO_PUNA(0):
+    case S5L8702_GPIO_PUNA(1):
+    case S5L8702_GPIO_PUNA(2):
+    case S5L8702_GPIO_PUNA(3):
+    case S5L8702_GPIO_PUNA(4):
+    case S5L8702_GPIO_PUNA(5):
+    case S5L8702_GPIO_PUNA(6):
+    case S5L8702_GPIO_PUNA(7):
+    case S5L8702_GPIO_PUNA(8):
+    case S5L8702_GPIO_PUNA(9):
+    case S5L8702_GPIO_PUNA(10):
+    case S5L8702_GPIO_PUNA(11):
+    case S5L8702_GPIO_PUNA(12):
+    case S5L8702_GPIO_PUNA(13):
+    case S5L8702_GPIO_PUNA(14):
+    case S5L8702_GPIO_PUNA(15):
+        printf("s5l8702_gpio_write: S5L8702_GPIO_PUNA%d = 0x%08x\n", port, (uint32_t) val);
+        s->puna[port] = (uint8_t) val;
+        break;
+    case S5L8702_GPIO_PUNB(0):
+    case S5L8702_GPIO_PUNB(1):
+    case S5L8702_GPIO_PUNB(2):
+    case S5L8702_GPIO_PUNB(3):
+    case S5L8702_GPIO_PUNB(4):
+    case S5L8702_GPIO_PUNB(5):
+    case S5L8702_GPIO_PUNB(6):
+    case S5L8702_GPIO_PUNB(7):
+    case S5L8702_GPIO_PUNB(8):
+    case S5L8702_GPIO_PUNB(9):
+    case S5L8702_GPIO_PUNB(10):
+    case S5L8702_GPIO_PUNB(11):
+    case S5L8702_GPIO_PUNB(12):
+    case S5L8702_GPIO_PUNB(13):
+    case S5L8702_GPIO_PUNB(14):
+    case S5L8702_GPIO_PUNB(15):
+        printf("s5l8702_gpio_write: S5L8702_GPIO_PUNB%d = 0x%08x\n", port, (uint32_t) val);
+        s->punb[port] = (uint8_t) val;
+        break;
+    case S5L8702_GPIO_PUNC(0):
+    case S5L8702_GPIO_PUNC(1):
+    case S5L8702_GPIO_PUNC(2):
+    case S5L8702_GPIO_PUNC(3):
+    case S5L8702_GPIO_PUNC(4):
+    case S5L8702_GPIO_PUNC(5):
+    case S5L8702_GPIO_PUNC(6):
+    case S5L8702_GPIO_PUNC(7):
+    case S5L8702_GPIO_PUNC(8):
+    case S5L8702_GPIO_PUNC(9):
+    case S5L8702_GPIO_PUNC(10):
+    case S5L8702_GPIO_PUNC(11):
+    case S5L8702_GPIO_PUNC(12):
+    case S5L8702_GPIO_PUNC(13):
+    case S5L8702_GPIO_PUNC(14):
+    case S5L8702_GPIO_PUNC(15):
+        printf("s5l8702_gpio_write: S5L8702_GPIO_PUNC%d = 0x%08x\n", port, (uint32_t) val);
+        s->punc[port] = (uint8_t) val;
+        break;
+    case S5L8702_GPIO_GPIOCMD:
+        printf("s5l8702_gpio_write: S5L8702_GPIO_GPIOCMD: old: 0x%08x, new: 0x%08x\n", s->gpiocmd, (uint8_t) val);
+        s->gpiocmd = (uint8_t) val;
+        break;
     default:
         qemu_log_mask(LOG_UNIMP, "%s: unimplemented write (offset 0x%04x, value 0x%08x)\n",
                       __func__, (uint32_t) offset, (uint32_t) val);
@@ -143,6 +266,9 @@ static void s5l8702_gpio_reset(DeviceState *dev)
     /* Set default values for registers */
     memset(s->pcon, 0, sizeof(s->pcon));
     memset(s->pdat, 0, sizeof(s->pdat));
+    memset(s->puna, 0, sizeof(s->puna));
+    memset(s->punb, 0, sizeof(s->punb));
+    memset(s->punc, 0, sizeof(s->punc));
 }
 
 static void s5l8702_gpio_init(Object *obj)
