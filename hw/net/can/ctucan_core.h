@@ -32,6 +32,9 @@
 #include "net/can_emu.h"
 
 #if !HOST_BIG_ENDIAN
+#ifdef __LITTLE_ENDIAN_BITFIELD
+#undef __LITTLE_ENDIAN_BITFIELD
+#endif
 #define __LITTLE_ENDIAN_BITFIELD 1
 #endif
 

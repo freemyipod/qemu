@@ -114,6 +114,10 @@ static void mem_and(uint8_t *dest, const uint8_t *src, size_t n)
 
 # define NAND_IO
 
+# ifdef PAGE_MASK
+# undef PAGE_MASK
+# endif
+
 # define PAGE(addr)          ((addr) >> ADDR_SHIFT)
 # define PAGE_START(page)    (PAGE(page) * (NAND_PAGE_SIZE + OOB_SIZE))
 # define PAGE_MASK           ((1 << ADDR_SHIFT) - 1)

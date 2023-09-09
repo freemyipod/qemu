@@ -167,6 +167,34 @@
  *  SAM Status codes
  */
 
+#ifdef CHECK_CONDITION
+#undef CHECK_CONDITION
+#endif
+#ifdef CONDITION_GOOD
+#undef CONDITION_GOOD
+#endif
+#ifdef BUSY
+#undef BUSY
+#endif
+#ifdef INTERMEDIATE_GOOD
+#undef INTERMEDIATE_GOOD
+#endif
+#ifdef INTERMEDIATE_C_GOOD
+#undef INTERMEDIATE_C_GOOD
+#endif
+#ifdef RESERVATION_CONFLICT
+#undef RESERVATION_CONFLICT
+#endif
+#ifdef COMMAND_TERMINATED
+#undef COMMAND_TERMINATED
+#endif
+#ifdef ACA_ACTIVE
+#undef ACA_ACTIVE
+#endif
+#ifdef TASK_ABORTED
+#undef TASK_ABORTED
+#endif
+
 #define GOOD                 0x00
 #define CHECK_CONDITION      0x02
 #define CONDITION_GOOD       0x04
