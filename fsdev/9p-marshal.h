@@ -3,6 +3,18 @@
 
 #include "p9array.h"
 
+#ifdef st_atime_nsec
+#undef st_atime_nsec
+#endif
+
+#ifdef st_mtime_nsec
+#undef st_mtime_nsec
+#endif
+
+#ifdef st_ctime_nsec
+#undef st_ctime_nsec
+#endif
+
 typedef struct V9fsString {
     uint16_t size;
     char *data;

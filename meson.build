@@ -2540,7 +2540,8 @@ disassemblers = {
   'loongarch' : ['CONFIG_LOONGARCH_DIS'],
 }
 
-have_ivshmem = config_host_data.get('CONFIG_EVENTFD')
+#have_ivshmem = config_host_data.get('CONFIG_EVENTFD')
+have_ivshmem = false
 host_kconfig = \
   (get_option('fuzzing') ? ['CONFIG_FUZZ=y'] : []) + \
   (have_tpm ? ['CONFIG_TPM=y'] : []) + \
