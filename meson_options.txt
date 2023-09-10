@@ -34,6 +34,8 @@ option('trace_file', type: 'string', value: 'trace',
 option('coroutine_backend', type: 'combo',
        choices: ['ucontext', 'sigaltstack', 'windows', 'auto'],
        value: 'auto', description: 'coroutine backend to use')
+option('shared_lib', type : 'boolean', value : false,
+       description: 'Build QEMU as a shared library')
 
 # Everything else can be set via --enable/--disable-* option
 # on the configure script command line.  After adding an option

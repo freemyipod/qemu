@@ -1,6 +1,6 @@
 project('qemu', ['c'], meson_version: '>=0.63.0',
         default_options: ['warning_level=1', 'c_std=gnu11', 'cpp_std=gnu++11', 'b_colorout=auto',
-                          'b_staticpic=false', 'stdsplit=false', 'optimization=2', 'b_pie=true'],
+                          'b_staticpic=true', 'stdsplit=false', 'optimization=2', 'b_pie=true'],
         version: files('VERSION'))
 
 add_test_setup('quick', exclude_suites: ['slow', 'thorough'], is_default: true)
@@ -3775,14 +3775,26 @@ foreach target : target_dirs
   arch_srcs += target_specific.sources()
   arch_deps += target_specific.dependencies()
 
-  lib = static_library('qemu-' + target,
-                 sources: arch_srcs + genh,
-                 dependencies: arch_deps,
-                 objects: objects,
-                 include_directories: target_inc,
-                 c_args: c_args,
-                 build_by_default: false,
-                 name_suffix: 'fa')
+  if get_option('shared_lib')
+    lib = shared_library('qemu-' + target,
+                   sources: arch_srcs + genh,
+                   dependencies: arch_deps + deps,
+                   objects: objects,
+                   include_directories: target_inc,
+                   c_args: c_args,
+                   install: true,
+                   link_depends: [block_syms, qemu_syms],
+                   link_args: link_args)
+  else
+    lib = static_library('qemu-' + target,
+                   sources: arch_srcs + genh,
+                   dependencies: arch_deps,
+                   objects: objects,
+                   include_directories: target_inc,
+                   c_args: c_args,
+                   build_by_default: false,
+                   name_suffix: 'fa')
+  endif
 
   if target.endswith('-softmmu')
     execs = [{
@@ -4094,6 +4106,7 @@ summary_info += {'QEMU_LDFLAGS':      ' '.join(qemu_ldflags)}
 summary_info += {'link-time optimization (LTO)': get_option('b_lto')}
 summary_info += {'PIE':               get_option('b_pie')}
 summary_info += {'static build':      get_option('prefer_static')}
+summary_info += {'build shared lib':  get_option('shared_lib')}
 summary_info += {'malloc trim support': has_malloc_trim}
 summary_info += {'membarrier':        have_membarrier}
 summary_info += {'debug graph lock':  get_option('debug_graph_lock')}
