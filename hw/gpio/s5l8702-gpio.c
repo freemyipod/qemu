@@ -118,6 +118,7 @@ static uint64_t s5l8702_gpio_read(void *opaque, hwaddr offset,
     case S5L8702_GPIO_GPIOCMD:
         r = s->gpiocmd;
         printf("s5l8702_gpio_read: S5L8702_GPIO_GPIOCMD = 0x%08x\n", r);
+        break;
     default:
         qemu_log_mask(LOG_UNIMP, "%s: unimplemented read (offset 0x%04x)\n",
                       __func__, (uint32_t) offset);

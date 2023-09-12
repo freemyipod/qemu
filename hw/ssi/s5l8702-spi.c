@@ -27,15 +27,22 @@ static uint64_t s5l8702_spi_read(void *opaque, hwaddr offset,
 
     switch (offset) {
     case SPICTRL:
-        s->spictrl += 1;
+        if (s->spictrl & 1) {
+            s->spictrl &= ~BIT(1);
+        } else {
+            s->spictrl |= BIT(1);
+        }
         r = s->spictrl;
         printf("%s: SPICTRL: 0x%08x\n", __func__, (uint32_t) r);
         break;
     case SPISTATUS:
-        if (s->has_rx_data || (s->spisetup & 1)) {
+        if (s->spisetup & 1) {
             r |= 0x3e00;
         }
-        // printf("%s: SPISTATUS: 0x%08x\n", __func__, (uint32_t) r);
+        if (s->has_rx_data) {
+            r |= 0x3e00;
+        }
+        printf("%s: SPISTATUS (has_rx_data: %d, spisetup & 1: %d): 0x%08x\n", __func__, s->has_rx_data, s->spisetup & 1, (uint32_t) r);
         break;
     case SPISETUP:
         r = s->spisetup;
@@ -48,10 +55,10 @@ static uint64_t s5l8702_spi_read(void *opaque, hwaddr offset,
     case SPIRXDATA:
         s->has_rx_data = false;
         if (s->spisetup & 1) {
-            s->spirxdata = ssi_transfer(s->spi, 0x000000FF);
+            s->spirxdata = ssi_transfer(s->spi, 0xFF);
         }
         r = s->spirxdata;
-        // printf("%s: SPIRXDATA: 0x%08x\n", __func__, (uint32_t) r);
+        printf("%s: SPIRXDATA: 0x%08x\n", __func__, (uint32_t) r);
         break;
     default:
         qemu_log_mask(LOG_UNIMP, "%s: unimplemented read (offset 0x%04x)\n",
@@ -73,6 +80,13 @@ static void s5l8702_spi_write(void *opaque, hwaddr offset,
     case SPICTRL:
         printf("%s: SPICTRL: 0x%08x\n", __func__, (uint32_t) val);
         s->spictrl = (uint32_t) val;
+        if (s->spictrl & BIT(2)) {
+            printf("%s: SPICTRL: clearing tx fifo...\n", __func__);
+        }
+        if (s->spictrl & BIT(3)) {
+            printf("%s: SPICTRL: clearing rx fifo...\n", __func__);
+            s->has_rx_data = false;
+        }
         break;
     case SPISETUP:
         printf("%s: SPISETUP: 0x%08x\n", __func__, (uint32_t) val);

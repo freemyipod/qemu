@@ -1,17 +1,13 @@
 #include "qemu/osdep.h"
 #include "qemu/units.h"
-#include "qemu/cutils.h"
 #include "qapi/error.h"
 #include "hw/arm/boot.h"
 #include "hw/registerfields.h"
 #include "qemu/error-report.h"
 #include "hw/boards.h"
 #include "hw/loader.h"
-#include "hw/arm/boot.h"
 #include "qom/object.h"
 #include "hw/arm/ipod-classic.h"
-#include "hw/loader.h"
-#include "hw/irq.h"
 #include "hw/qdev-properties.h"
 
 static char *ipod_classic_get_bootrom_path(Object *obj, Error **errp)
@@ -69,6 +65,11 @@ static void ipod_classic_machine_init(MachineState *machine)
         exit(1);
     }
 
+    if (!s->bootrom_path) {
+        error_report("bootrom property not set");
+        exit(1);
+    }
+
     /* Initialize s5l8702 soc */
     object_initialize_child(OBJECT(s), "soc", &s->soc, TYPE_S5L8702);
     sysbus_realize(SYS_BUS_DEVICE(&s->soc), &error_fatal);
@@ -94,14 +95,11 @@ static void ipod_classic_machine_init(MachineState *machine)
     /* PCF5063x */
     // object_initialize_child(OBJECT(s), "pcf5063x", &s->pcf5063x, TYPE_PCF5063X);
     i2c_slave_create_simple(s->soc.i2c[0].bus, TYPE_PCF5063X, 0x73);
-    
 
     /* Read the bootrom, copy it to memory and execute it */
-    assert(s->bootrom_path);
-
     uint8_t *bootrom = NULL;
     size_t bootrom_size = 0;
-    if (g_file_get_contents("/Users/iscle/Downloads/classic_3g/bootrom_patched.bin", (char **) &bootrom, &bootrom_size, NULL)) {
+    if (g_file_get_contents(s->bootrom_path, (char **) &bootrom, &bootrom_size, NULL)) {
         printf("ipod_classic_machine_init: bootrom read successfully\n");
         AddressSpace *nsas = cpu_get_address_space(CPU(&s->soc.cpu), ARMASIdx_NS);
         address_space_write(nsas, 0x20000000, MEMTXATTRS_UNSPECIFIED, bootrom, bootrom_size);

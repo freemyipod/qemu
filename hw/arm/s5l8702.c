@@ -1,15 +1,12 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/module.h"
-#include "qemu/log.h"
 #include "cpu.h"
 #include "exec/address-spaces.h"
 #include "hw/boards.h"
-#include "hw/qdev-properties.h"
 #include "hw/qdev-core.h"
 #include "hw/arm/s5l8702.h"
 #include "hw/misc/unimp.h"
-#include "qemu/units.h"
 
 static void s5l8702_init(Object *obj)
 {
