@@ -16,6 +16,11 @@ struct S5L8702LcdState {
 
     /*< public >*/
     MemoryRegion iomem;
+    uint32_t config;
+    uint32_t wcmd;
+    uint32_t status;
+    uint32_t phtime;
+    uint32_t wdata;
 
     QemuConsole *con;
 

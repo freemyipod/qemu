@@ -124,6 +124,11 @@ static uint8_t pcf5063x_read(Pcf5063xState *s, uint8_t addr)
     uint8_t r = 0;
 
     switch (addr) {
+    case PCF5063X_ADCS3:
+        // TODO: Handle me!
+        r = s->regs[addr];
+        r = 0xFF;
+        break;
         // The following registers are read at the startup, INTX are just to clear them
     case PCF5063X_GPIO3CFG:
     case PCF5063X_OOCSHDWN:
@@ -181,11 +186,11 @@ static int pcf5063x_send(I2CSlave *slave, uint8_t data)
     Pcf5063xState *s = PCF5063X(slave);
     
     if (!s->has_word) {
-        printf("pcf5063x_send: setting word %02x\n", data);
+//        printf("pcf5063x_send: setting word %02x\n", data);
         s->has_word = true;
         s->word = data;
     } else {
-        printf("pcf5063x_send: writing word %02x: %02x\n", s->word, data);
+//        printf("pcf5063x_send: writing word %02x: %02x\n", s->word, data);
         pcf5063x_write(s, s->word, data);
         s->word++;
     }

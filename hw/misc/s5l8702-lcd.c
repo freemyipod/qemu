@@ -4,18 +4,48 @@
 #include "qemu/module.h"
 #include "hw/misc/s5l8702-lcd.h"
 
+#define LCD_CONFIG  0x00
+#define LCD_WCMD    0x04
+#define LCD_STATUS  0x1c
+#define LCD_PHTIME  0x20
+#define LCD_WDATA   0x40
+
+#define LCD_STATUS_READY    BIT(1)
+
 static uint64_t s5l8702_lcd_read(void *opaque, hwaddr offset,
                                       unsigned size)
 {
     const S5L8702LcdState *s = S5L8702_LCD(opaque);
+    uint32_t r = 0;
 
     switch (offset) {
+    case LCD_CONFIG:
+        r = s->config;
+        printf("s5l8702_lcd_read: LCD_CONFIG = 0x%08x\n", r);
+        break;
+    case LCD_WCMD:
+        r = s->wcmd;
+        printf("s5l8702_lcd_read: LCD_WCMD = 0x%08x\n", r);
+        break;
+    case LCD_STATUS:
+        r = s->status;
+        r = 0xFFFFFFEF; // TODO: Fix me!
+        printf("s5l8702_lcd_read: LCD_STATUS = 0x%08x\n", r);
+        break;
+    case LCD_PHTIME:
+        r = s->phtime;
+        printf("s5l8702_lcd_read: LCD_PHTIME = 0x%08x\n", r);
+        break;
+    case LCD_WDATA:
+        r = s->wdata;
+        printf("s5l8702_lcd_read: LCD_WDATA = 0x%08x\n", r);
+        break;
     default:
         qemu_log_mask(LOG_UNIMP, "%s: unimplemented read (offset 0x%04x)\n",
                       __func__, (uint32_t) offset);
     }
 
-    return 0;
+    return r;
 }
 
 static void s5l8702_lcd_write(void *opaque, hwaddr offset,
@@ -24,6 +54,38 @@ static void s5l8702_lcd_write(void *opaque, hwaddr offset,
     S5L8702LcdState *s = S5L8702_LCD(opaque);
 
     switch (offset) {
+    case LCD_CONFIG:
+        s->config = (uint32_t) val;
+        printf("s5l8702_lcd_write: LCD_CONFIG = 0x%08x\n", (uint32_t) val);
+        break;
+    case LCD_WCMD:
+        s->wcmd = (uint32_t) val;
+        printf("s5l8702_lcd_write: LCD_WCMD = 0x%08x\n", (uint32_t) val);
+
+        switch (s->wcmd) {
+            case 0x28: // DISPLAY_OFF
+                printf("s5l8702_lcd_write: DISPLAY_OFF\n");
+                break;
+            case 0x29: // DISPLAY_ON
+                printf("s5l8702_lcd_write: DISPLAY_ON\n");
+                break;
+            default:
+                qemu_log_mask(LOG_UNIMP, "%s: unimplemented lcd command (0x%08x)\n",
+                              __func__, s->wcmd);
+        }
+        break;
+    case LCD_STATUS:
+        s->status = (uint32_t) val;
+        printf("s5l8702_lcd_write: LCD_STATUS = 0x%08x\n", (uint32_t) val);
+        break;
+    case LCD_PHTIME:
+        s->phtime = (uint32_t) val;
+        printf("s5l8702_lcd_write: LCD_PHTIME = 0x%08x\n", (uint32_t) val);
+        break;
+    case LCD_WDATA:
+        s->wdata = (uint32_t) val;
+        printf("s5l8702_lcd_write: LCD_WDATA = 0x%08x\n", (uint32_t) val);
+        break;
     default:
         qemu_log_mask(LOG_UNIMP, "%s: unimplemented write (offset 0x%04x, value 0x%08x)\n",
                       __func__, (uint32_t) offset, (uint32_t) val);
@@ -43,6 +105,11 @@ static void s5l8702_lcd_reset(DeviceState *dev)
     printf("s5l8702_lcd_reset\n");
 
     /* Reset registers */
+    s->config = 0;
+    s->wcmd = 0;
+    s->status = LCD_STATUS_READY;
+    s->phtime = 0;
+    s->wdata = 0;
 }
 
 static void fb_invalidate_display(void *opaque)

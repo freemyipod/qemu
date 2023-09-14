@@ -67,7 +67,7 @@ static uint64_t s5l8702_i2c_read(void *opaque, hwaddr offset,
         break;
     case S5L8702_I2C_IICDS:
         r = s->iicds;
-        I2C_LOG("s5l8702_i2c_read: IICDS = 0x%08x\n", r);
+        printf("s5l8702_i2c_read: IICDS = 0x%08x\n", r);
         break;
     case S5L8702_I2C_IIUNK10:
         r = s->iicunk10;
