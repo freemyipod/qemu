@@ -47,6 +47,12 @@ static void ipod_classic_machine_init(MachineState *machine)
         exit(1);
     }
 
+    /* Only allow ARM926 for this board */
+    if (strcmp(machine->cpu_type, ARM_CPU_TYPE_NAME("arm926")) != 0) {
+        error_report("This board can only be used with arm926 CPU");
+        exit(1);
+    }
+
     /* This board has fixed size RAM (64MiB) */
     if (machine->ram_size != 64 * MiB) {
         error_report("This machine can only be used with 64MiB RAM");
@@ -56,12 +62,6 @@ static void ipod_classic_machine_init(MachineState *machine)
     /* Only allow 1 CPU for this board */
     if (machine->smp.cpus != 1) {
         error_report("This machine can only be used with 1 CPU");
-        exit(1);
-    }
-
-    /* Only allow ARM926 for this board */
-    if (strcmp(machine->cpu_type, ARM_CPU_TYPE_NAME("arm926")) != 0) {
-        error_report("This board can only be used with arm926 CPU");
         exit(1);
     }
 
@@ -75,7 +75,7 @@ static void ipod_classic_machine_init(MachineState *machine)
     sysbus_realize(SYS_BUS_DEVICE(&s->soc), &error_fatal);
 
     /* DRAM */
-    memory_region_init_ram(&s->dram, OBJECT(s), "ipod_classic.dram", machine->ram_size, &error_fatal);
+    memory_region_init_ram(&s->dram, OBJECT(s), "dram", machine->ram_size, &error_fatal);
     memory_region_add_subregion(get_system_memory(), S5L8702_DRAM_BASE_ADDR, &s->dram);
 
     /* Connect an SPI flash to SPI0 */
