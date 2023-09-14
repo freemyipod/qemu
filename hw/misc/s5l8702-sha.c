@@ -1,5 +1,4 @@
 #include "qemu/osdep.h"
-#include "qemu/units.h"
 #include "hw/sysbus.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
@@ -28,13 +27,13 @@ static void s5l8702_sha_write(void *opaque, hwaddr offset,
     S5L8702ShaState *s = S5L8702_SHA(opaque);
     const uint32_t idx = REG_INDEX(offset);
 
-    assert(0);
-
     switch (offset) {
     default:
         qemu_log_mask(LOG_UNIMP, "%s: unimplemented write (offset 0x%04x, value 0x%08x)\n",
                       __func__, (uint32_t) offset, (uint32_t) val);
     }
+
+//    assert(0);
 
     s->regs[idx] = (uint32_t) val;
 }

@@ -9,6 +9,7 @@
 #include "hw/misc/unimp.h"
 
 #define S5L8702_LCD_BASE    0x38300000
+#define S5L8702_JPEG_BASE   0x39600000
 
 static void s5l8702_init(Object *obj)
 {
@@ -117,6 +118,10 @@ static void s5l8702_realize(DeviceState *dev, Error **errp)
     /* LCD */
 //    sysbus_realize(SYS_BUS_DEVICE(&s->lcd), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->lcd), 0, S5L8702_LCD_BASE);
+
+    /* JPEG */
+    sysbus_realize(SYS_BUS_DEVICE(&s->jpeg), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->jpeg), 0, S5L8702_JPEG_BASE);
 
     /* BootROM */
     memory_region_init_ram(&s->brom, OBJECT(dev), "s5l8702.bootrom", S5L8702_BOOTROM_SIZE, &error_fatal);
