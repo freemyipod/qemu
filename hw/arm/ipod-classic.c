@@ -81,12 +81,13 @@ static void ipod_classic_machine_init(MachineState *machine)
     /* Connect an SPI flash to SPI0 */
     DeviceState *flash_dev = qdev_new("sst25vf080b"); // According to https://freemyipod.org/wiki/Classic_3G
     DriveInfo *dinfo = drive_get(IF_MTD, 0, 0);
-    if (dinfo) {
-        printf("dinfo found\n");
-        qdev_prop_set_drive_err(flash_dev, "drive", blk_by_legacy_dinfo(dinfo), &error_fatal);
-    } else {
-        printf("No dinfo found\n");
+    if (!dinfo) {
+        printf("NOR image not found\n");
+        exit(1);
     }
+
+    printf("Loaded NOR image\n");
+    qdev_prop_set_drive_err(flash_dev, "drive", blk_by_legacy_dinfo(dinfo), &error_fatal);
     qdev_realize_and_unref(flash_dev, BUS(s->soc.spi[0].spi), &error_fatal);
 
     qemu_irq flash_cs = qdev_get_gpio_in_named(flash_dev, SSI_GPIO_CS, 0);

@@ -235,6 +235,9 @@ static void s5l8702_gpio_write(void *opaque, hwaddr offset,
     case S5L8702_GPIO_GPIOCMD:
         printf("s5l8702_gpio_write: S5L8702_GPIO_GPIOCMD: old: 0x%08x, new: 0x%08x\n", s->gpiocmd, (uint8_t) val);
         s->gpiocmd = (uint8_t) val;
+        if ((s->gpiocmd & ~1) == 0x0000e) {
+            qemu_set_irq(s->output[0], s->gpiocmd & 1);
+        }
         break;
     default:
         qemu_log_mask(LOG_UNIMP, "%s: unimplemented write (offset 0x%04x, value 0x%08x)\n",

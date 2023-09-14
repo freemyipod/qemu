@@ -24,10 +24,9 @@ struct S5L8702SpiState {
 
     uint32_t spictrl;
     uint32_t spisetup;
+    uint32_t spistatus;
     uint32_t spitxdata;
     uint32_t spirxdata;
-
-    bool has_rx_data;
 };
 
 #endif /* HW_SSI_S5L8702_SPI_H */

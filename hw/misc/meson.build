@@ -44,7 +44,7 @@ specific_ss.add(when: 'CONFIG_ALLWINNER_H3', if_true: files('allwinner-cpucfg.c'
 softmmu_ss.add(when: 'CONFIG_ALLWINNER_H3', if_true: files('allwinner-h3-dramc.c'))
 softmmu_ss.add(when: 'CONFIG_ALLWINNER_H3', if_true: files('allwinner-h3-sysctrl.c'))
 softmmu_ss.add(when: 'CONFIG_ALLWINNER_H3', if_true: files('allwinner-sid.c'))
-softmmu_ss.add(when: 'CONFIG_S5L8702', if_true: files('s5l8702-aes.c', 's5l8702-clk.c', 's5l8702-sha.c'))
+softmmu_ss.add(when: 'CONFIG_S5L8702', if_true: files('s5l8702-aes.c', 's5l8702-clk.c', 's5l8702-lcd.c', 's5l8702-sha.c'))
 softmmu_ss.add(when: 'CONFIG_AXP209_PMU', if_true: files('axp209.c'))
 softmmu_ss.add(when: 'CONFIG_PCF5063X', if_true: files('pcf5063x.c'))
 softmmu_ss.add(when: 'CONFIG_REALVIEW', if_true: files('arm_sysctl.c'))

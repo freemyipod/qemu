@@ -1,5 +1,4 @@
 #include "qemu/osdep.h"
-#include "qemu/units.h"
 #include "hw/sysbus.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
@@ -14,6 +13,18 @@
 #define SPICLKDIV   0x30
 #define SPIRXLIMIT  0x34
 
+#define SPICTRL_CLRTX  BIT(2)
+#define SPICTRL_CLRRX  BIT(3)
+
+#define SPISETUP_UNK0   BIT(0) // Auto receive after send?
+#define SPISETUP_UNK1   BIT(1)
+
+#define SPISTATUS_TX_CNT_MASK   0xf0
+#define SPISTATUS_TX_CNT        BIT(4)
+#define SPISTATUS_RX_CNT_MASK   0xf00
+#define SPISTATUS_RX_CNT        BIT(8)
+
+
 static void s5l8702_spi_update_irq(S5L8702SpiState *s)
 {
     // TODO
@@ -23,7 +34,7 @@ static uint64_t s5l8702_spi_read(void *opaque, hwaddr offset,
                                       unsigned size)
 {
     S5L8702SpiState *s = S5L8702_SPI(opaque);
-    uint64_t r = 0;
+    uint32_t r = 0;
 
     switch (offset) {
     case SPICTRL:
@@ -33,32 +44,33 @@ static uint64_t s5l8702_spi_read(void *opaque, hwaddr offset,
             s->spictrl |= BIT(1);
         }
         r = s->spictrl;
-        printf("%s: SPICTRL: 0x%08x\n", __func__, (uint32_t) r);
+        printf("%s: SPICTRL: 0x%08x\n", __func__, r);
         break;
     case SPISTATUS:
+        r = s->spistatus;
+        if (s->spistatus & SPISTATUS_RX_CNT) {
+            r |= 0x3e00;
+        }
         if (s->spisetup & 1) {
             r |= 0x3e00;
         }
-        if (s->has_rx_data) {
-            r |= 0x3e00;
-        }
-        printf("%s: SPISTATUS (has_rx_data: %d, spisetup & 1: %d): 0x%08x\n", __func__, s->has_rx_data, s->spisetup & 1, (uint32_t) r);
+        printf("%s: SPISTATUS: 0x%08x\n", __func__, r);
         break;
     case SPISETUP:
         r = s->spisetup;
-        printf("%s: SPISETUP: 0x%08x\n", __func__, (uint32_t) r);
+        printf("%s: SPISETUP: 0x%08x\n", __func__, r);
         break;
     case SPITXDATA:
         r = s->spitxdata;
-        printf("%s: SPITXDATA: 0x%08x\n", __func__, (uint32_t) r);
+        printf("%s: SPITXDATA: 0x%08x\n", __func__, r);
         break;
     case SPIRXDATA:
-        s->has_rx_data = false;
-        if (s->spisetup & 1) {
+        s->spistatus &= ~SPISTATUS_RX_CNT;
+        if (s->spisetup & SPISETUP_UNK0) {
             s->spirxdata = ssi_transfer(s->spi, 0xFF);
         }
         r = s->spirxdata;
-        printf("%s: SPIRXDATA: 0x%08x\n", __func__, (uint32_t) r);
+        printf("%s: SPIRXDATA: 0x%08x\n", __func__, r);
         break;
     default:
         qemu_log_mask(LOG_UNIMP, "%s: unimplemented read (offset 0x%04x)\n",
@@ -80,12 +92,15 @@ static void s5l8702_spi_write(void *opaque, hwaddr offset,
     case SPICTRL:
         printf("%s: SPICTRL: 0x%08x\n", __func__, (uint32_t) val);
         s->spictrl = (uint32_t) val;
-        if (s->spictrl & BIT(2)) {
+        if (s->spictrl & SPICTRL_CLRTX) {
+            s->spictrl &= ~SPICTRL_CLRTX;
             printf("%s: SPICTRL: clearing tx fifo...\n", __func__);
+            s->spistatus &= ~SPISTATUS_TX_CNT;
         }
-        if (s->spictrl & BIT(3)) {
+        if (s->spictrl & SPICTRL_CLRRX) {
+            s->spictrl &= ~SPICTRL_CLRRX;
             printf("%s: SPICTRL: clearing rx fifo...\n", __func__);
-            s->has_rx_data = false;
+            s->spistatus &= ~SPISTATUS_RX_CNT;
         }
         break;
     case SPISETUP:
@@ -95,9 +110,11 @@ static void s5l8702_spi_write(void *opaque, hwaddr offset,
     case SPITXDATA:
         printf("%s: SPITXDATA: 0x%08x\n", __func__, (uint32_t) val);
         s->spitxdata = (uint32_t) val;
-
         s->spirxdata = ssi_transfer(s->spi, s->spitxdata);
-        s->has_rx_data = true;
+        s->spistatus |= SPISTATUS_RX_CNT;
+        break;
+    case SPIRXLIMIT:
+        printf("%s: SPIRXLIMIT: 0x%08x\n", __func__, (uint32_t) val);
         break;
     default:
         qemu_log_mask(LOG_UNIMP, "%s: unimplemented write (offset 0x%04x, value 0x%08x)\n",
@@ -119,10 +136,11 @@ static void s5l8702_spi_reset(DeviceState *dev)
     S5L8702SpiState *s = S5L8702_SPI(dev);
 
     /* Set default values for registers */
+    s->spictrl = 0;
     s->spisetup = 0;
+    s->spistatus = 0;
     s->spitxdata = 0;
     s->spirxdata = 0;
-    s->has_rx_data = false;
 }
 
 static void s5l8702_spi_init(Object *obj)
