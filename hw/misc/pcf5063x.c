@@ -124,12 +124,17 @@ static uint8_t pcf5063x_read(Pcf5063xState *s, uint8_t addr)
     uint8_t r = 0;
 
     switch (addr) {
+    case PCF5063X_ADCS1:
+        r = 0xFF;
     case PCF5063X_ADCS3:
-        // TODO: Handle me!
-        r = s->regs[addr];
         r = 0xFF;
         break;
-        // The following registers are read at the startup, INTX are just to clear them
+    case PCF5063X_OOCSTAT:
+        r = 0x00;
+        break;
+    case PCF5063X_MBCS1:
+        r = 0xFF;
+    // The following registers are read at the startup, INTX are just to clear them
     case PCF5063X_GPIO3CFG:
     case PCF5063X_OOCSHDWN:
     case PCF5063X_INT1:

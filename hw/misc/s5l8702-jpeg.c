@@ -4,6 +4,8 @@
 #include "qemu/module.h"
 #include "hw/misc/s5l8702-jpeg.h"
 
+#define JPEG_UNK1   0x60000
+
 static uint64_t s5l8702_jpeg_read(void *opaque, hwaddr offset,
                                       unsigned size)
 {
@@ -11,6 +13,9 @@ static uint64_t s5l8702_jpeg_read(void *opaque, hwaddr offset,
     uint32_t r = 0;
 
     switch (offset) {
+    case JPEG_UNK1:
+        r = 0xFFFFFFFF;
+        break;
     default:
         qemu_log_mask(LOG_UNIMP, "%s: unimplemented read (offset 0x%04x)\n",
                       __func__, (uint32_t) offset);

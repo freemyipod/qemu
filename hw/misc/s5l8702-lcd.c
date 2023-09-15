@@ -198,9 +198,9 @@ static void s5l8702_lcd_init(Object *obj)
     memory_region_init_io(&s->iomem, OBJECT(s), &s5l8702_lcd_ops, s, TYPE_S5L8702_LCD, S5L8702_LCD_SIZE);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
 
-    s->con = graphic_console_init(DEVICE(obj), 0, &vgafb_ops, s);
+//    s->con = graphic_console_init(DEVICE(obj), 0, &vgafb_ops, s);
 //    qemu_console_resize(s->con, s->config.xres, s->config.yres);
-    qemu_console_resize(s->con, 320, 240);
+//    qemu_console_resize(s->con, 320, 240);
 }
 
 static void s5l8702_lcd_class_init(ObjectClass *klass, void *data)

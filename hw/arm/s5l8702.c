@@ -10,6 +10,7 @@
 
 #define S5L8702_LCD_BASE    0x38300000
 #define S5L8702_JPEG_BASE   0x39600000
+#define S5L8702_DMA0_BASE   0x38200000
 
 static void s5l8702_init(Object *obj)
 {
@@ -55,6 +56,10 @@ static void s5l8702_init(Object *obj)
     object_initialize_child(obj, "timer", &s->timer, TYPE_S5L8702_TIMER);
     object_initialize_child(obj, "lcd", &s->lcd, TYPE_S5L8702_LCD);
     object_initialize_child(obj, "jpeg", &s->jpeg, TYPE_S5L8702_JPEG);
+
+    for (uint32_t i = 0; i < ARRAY_SIZE(s->dma); i++) {
+        object_initialize_child(obj, "dma[*]", &s->dma[i], TYPE_PL080);
+    }
 }
 
 static void s5l8702_realize(DeviceState *dev, Error **errp)
@@ -120,6 +125,14 @@ static void s5l8702_realize(DeviceState *dev, Error **errp)
     /* JPEG */
     sysbus_realize(SYS_BUS_DEVICE(&s->jpeg), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->jpeg), 0, S5L8702_JPEG_BASE);
+
+    /* DMA */
+    for (uint32_t i = 0; i < ARRAY_SIZE(s->dma); i++) {
+        object_property_set_link(OBJECT(&s->dma[i]), "downstream", OBJECT(get_system_memory()), &error_fatal);
+        sysbus_realize(SYS_BUS_DEVICE(&s->dma[i]), &error_fatal);
+    }
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->dma[0]), 0, S5L8702_DMA0_BASE);
+    //sysbus_mmio_map(SYS_BUS_DEVICE(&s->dma[1]), 0, S5L8702_DMA1_BASE);
 
     /* BootROM */
     memory_region_init_ram(&s->brom, OBJECT(dev), "s5l8702.bootrom", S5L8702_BOOTROM_SIZE, &error_fatal);
