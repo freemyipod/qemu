@@ -78,6 +78,9 @@ static void ipod_classic_machine_init(MachineState *machine)
     memory_region_init_ram(&s->dram, OBJECT(s), "dram", machine->ram_size, &error_fatal);
     memory_region_add_subregion(get_system_memory(), S5L8702_DRAM_BASE_ADDR, &s->dram);
 
+    memory_region_init_alias(&s->dram_alias, OBJECT(s), "dram-alias", &s->dram, 0, machine->ram_size);
+    memory_region_add_subregion(get_system_memory(), 0x88000000, &s->dram_alias);
+
     /* Connect an SPI flash to SPI0 */
     DeviceState *flash_dev = qdev_new("sst25vf080b"); // According to https://freemyipod.org/wiki/Classic_3G
     DriveInfo *dinfo = drive_get(IF_MTD, 0, 0);

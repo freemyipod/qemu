@@ -81,15 +81,6 @@ static void s5l8702_realize(DeviceState *dev, Error **errp)
     S5L8702State *s = S5L8702(dev);
     MemoryRegion *system_memory = get_system_memory();
 
-    // allocate ram
-    MemoryRegion *sec = g_new(MemoryRegion, 1);
-    memory_region_init_ram(sec, NULL, "ram", 0x2000000, &error_fatal);
-    memory_region_add_subregion(system_memory, 0x8000000, sec);
-
-    MemoryRegion *iomem = g_new(MemoryRegion, 1);
-    memory_region_init_alias(iomem, NULL, "himem", sec, 0, 0x2000000);
-    memory_region_add_subregion(system_memory, 0x88000000, iomem);
-
     printf("s5l8702_realize\n");
 
     qdev_realize(DEVICE(&s->cpu), NULL, &error_fatal);

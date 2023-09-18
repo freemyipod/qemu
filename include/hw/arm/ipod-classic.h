@@ -19,6 +19,7 @@ struct IpodClassicState {
     /*< public >*/
     S5L8702State soc;
     MemoryRegion dram;
+    MemoryRegion dram_alias;
     Pcf5063xState pcf5063x;
 
     char *bootrom_path;
