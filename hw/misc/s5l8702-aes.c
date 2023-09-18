@@ -14,31 +14,100 @@ static uint64_t s5l8702_aes_read(void *opaque, hwaddr offset,
     const uint32_t idx = REG_INDEX(offset);
 
     switch (offset) {
-    case 0xc: 
-        break;
+    case AES_STATUS:
+        return s->status;
     default:
         qemu_log_mask(LOG_UNIMP, "%s: unimplemented read (offset 0x%04x)\n",
                       __func__, (uint32_t) offset);
     }
 
-    return s->regs[idx];
+    return 0; //s->regs[idx];
 }
 
 static void s5l8702_aes_write(void *opaque, hwaddr offset,
-                                   uint64_t val, unsigned size)
+                                   uint64_t value, unsigned size)
 {
     S5L8702AesState *s = S5L8702_AES(opaque);
     const uint32_t idx = REG_INDEX(offset);
 
-    assert(0);
+    uint8_t *inbuf;
+    uint8_t *buf;
+    static uint8_t keylenop = 0;
 
-    switch (offset) {
-    default:
-        qemu_log_mask(LOG_UNIMP, "%s: unimplemented write (offset 0x%04x, value 0x%08x)\n",
-                      __func__, (uint32_t) offset, (uint32_t) val);
+    fprintf(stderr, "%s: offset 0x%08x value 0x%08x\n", __FUNCTION__, offset, value);
+
+    switch(offset) {
+        case AES_GO:
+            inbuf = (uint8_t *)malloc(s->insize);
+            cpu_physical_memory_read((s->inaddr), inbuf, s->insize);
+
+            switch(s->keytype) {
+                    case AESGID:    
+                        fprintf(stderr, "%s: No support for GID key\n", __func__);
+                        break;
+                    case AESUID:
+                        fprintf(stderr, "%s: No support for UID key\n", __func__);
+                        // AES_set_decrypt_key(key_uid, sizeof(key_uid) * 8, &s->decryptKey);
+                        break;
+                    case AESCustom:
+                        AES_set_decrypt_key((uint8_t *)s->custkey, 0x20 * 8, &s->decryptKey);
+                        break;
+            }
+
+            buf = (uint8_t *) malloc(s->insize);
+
+            // ignore the GID key because it's assumed anything encrypted with this key has been decrypted prior to emulation
+            if(s->keytype != 0x01) AES_cbc_encrypt(inbuf, buf, s->insize, &s->decryptKey, (uint8_t *)s->ivec, s->operation);
+
+            printf("AES: %s %d bytes from 0x%08x to 0x%08x\n", s->operation == AES_DECRYPT ? "decrypted" : "encrypted", s->insize, s->inaddr, s->outaddr);
+
+            cpu_physical_memory_write((s->outaddr), buf, s->insize);
+            memset(s->custkey, 0, 0x20);
+            memset(s->ivec, 0, 0x10);
+            free(inbuf);
+            free(buf);
+            keylenop = 0;
+            s->outsize = s->insize;
+            s->status = 0xf;
+            break;
+        case AES_KEYLEN:
+            if(keylenop == 1) {
+                s->operation = value;
+            }
+            keylenop++;
+            s->keylen = value;
+            break;
+        case AES_INADDR:
+            s->inaddr = value;
+            break;
+        case AES_INSIZE:
+            s->insize = value;
+            break;
+        case AES_OUTSIZE:
+            s->outsize = value;
+            break;
+        case AES_OUTADDR:
+            s->outaddr = value;
+            break;
+        case AES_TYPE:
+            s->keytype = value;
+            break;
+        case AES_KEY_REG ... ((AES_KEY_REG + AES_KEYSIZE) - 1):
+            {
+                uint8_t idx = (offset - AES_KEY_REG) / 4;
+                s->custkey[idx] |= value;
+                break;
+            }
+        case AES_IV_REG ... ((AES_IV_REG + AES_IVSIZE) -1 ):
+            {
+                uint8_t idx = (offset - AES_IV_REG) / 4;
+                s->ivec[idx] |= value;
+                break;
+            }
+        default:
+            //fprintf(stderr, "%s: UNMAPPED AES_ADDR @ offset 0x%08x - 0x%08x\n", __FUNCTION__, offset, value);
+            break;
     }
-
-    s->regs[idx] = (uint32_t) val;
 }
 
 static const MemoryRegionOps s5l8702_aes_ops = {
@@ -59,10 +128,10 @@ static void s5l8702_aes_reset(DeviceState *dev)
     printf("s5l8702_aes_reset\n");
 
     /* Reset registers */
-    memset(s->regs, 0, sizeof(s->regs));
+    // memset(s->regs, 0, sizeof(s->regs));
 
     /* Set default values for registers */
-    s->regs[REG_INDEX(0xC)] = 0x0000000F; // simulate AES finished
+    s->status = 0x0000000F; // simulate AES finished
 }
 
 static void s5l8702_aes_init(Object *obj)
