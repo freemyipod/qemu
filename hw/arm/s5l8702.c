@@ -11,6 +11,18 @@
 #define S5L8702_LCD_BASE    0x38300000
 #define S5L8702_JPEG_BASE   0x39600000
 #define S5L8702_DMA0_BASE   0x38200000
+#define S5L8702_ATA_BASE    0x38700000
+
+#define FRAMEBUFFER_MEM_BASE 0xfe00000
+
+static uint32_t align_64k_high(uint32_t addr) {
+    return (addr + 0xffffull) & ~0xffffull;
+}
+static void allocate_ram(MemoryRegion *top, const char *name, uint32_t addr, uint32_t size) {
+    MemoryRegion *sec = g_new(MemoryRegion, 1);
+    memory_region_init_ram(sec, NULL, name, size, &error_fatal);
+    memory_region_add_subregion(top, addr, sec);
+}
 
 static void s5l8702_init(Object *obj)
 {
@@ -60,6 +72,8 @@ static void s5l8702_init(Object *obj)
     for (uint32_t i = 0; i < ARRAY_SIZE(s->dma); i++) {
         object_initialize_child(obj, "dma[*]", &s->dma[i], TYPE_PL080);
     }
+
+    object_initialize_child(obj, "ata", &s->ata, TYPE_S5L8702_ATA);
 }
 
 static void s5l8702_realize(DeviceState *dev, Error **errp)
@@ -119,10 +133,17 @@ static void s5l8702_realize(DeviceState *dev, Error **errp)
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->timer), 0, S5L8702_TIMER_BASE);
 
     /* LCD */
+    s->lcd.sysmem = get_system_memory();
+    s->lcd.nsas = cpu_get_address_space(CPU(&s->cpu), ARMASIdx_NS);
+    allocate_ram(s->lcd.sysmem, "framebuffer", FRAMEBUFFER_MEM_BASE, align_64k_high(4 * 320 * 480));
+    uint8_t stuff[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    address_space_rw(s->lcd.nsas, FRAMEBUFFER_MEM_BASE, MEMTXATTRS_UNSPECIFIED, (uint8_t *)stuff, 16, 1);
     sysbus_realize(SYS_BUS_DEVICE(&s->lcd), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->lcd), 0, S5L8702_LCD_BASE);
 
     /* JPEG */
+    s->jpeg.sysmem = get_system_memory();
+    s->jpeg.nsas = cpu_get_address_space(CPU(&s->cpu), ARMASIdx_NS);
     sysbus_realize(SYS_BUS_DEVICE(&s->jpeg), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->jpeg), 0, S5L8702_JPEG_BASE);
 
@@ -133,6 +154,10 @@ static void s5l8702_realize(DeviceState *dev, Error **errp)
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->dma[0]), 0, S5L8702_DMA0_BASE);
     //sysbus_mmio_map(SYS_BUS_DEVICE(&s->dma[1]), 0, S5L8702_DMA1_BASE);
+
+    /* ATA */
+    sysbus_realize(SYS_BUS_DEVICE(&s->ata), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->ata), 0, S5L8702_ATA_BASE);
 
     /* BootROM */
     memory_region_init_ram(&s->brom, OBJECT(dev), "s5l8702.bootrom", S5L8702_BOOTROM_SIZE, &error_fatal);

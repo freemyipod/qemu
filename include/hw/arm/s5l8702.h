@@ -16,6 +16,7 @@
 #include "hw/misc/s5l8702-lcd.h"
 #include "hw/misc/s5l8702-jpeg.h"
 #include "hw/dma/pl080.h"
+#include "hw/ide/s5l8702-ata.h"
 
 #define TYPE_S5L8702    "s5l8702"
 OBJECT_DECLARE_SIMPLE_TYPE(S5L8702State, S5L8702)
@@ -64,6 +65,7 @@ struct S5L8702State {
     S5L8702LcdState lcd;
     S5L8702JpegState jpeg;
     PL080State dma[2];
+    S5L8702AtaState ata;
 };
 
 #endif /* HW_ARM_S5L8702_H */
