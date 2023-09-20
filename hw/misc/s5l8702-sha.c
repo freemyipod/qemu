@@ -29,9 +29,9 @@ static uint64_t s5l8702_sha_read(void *opaque, hwaddr offset,
     S5L8702ShaState *s = S5L8702_SHA(opaque);
 
     switch (offset) {
-        case SHA_CONFIG:
+        case SHA1CONFIG:
             return s->config;
-        case SHA_RESET:
+        case SHA1RESET:
             return 0;
         case SHA1OUT ... SHA1OUT + 16 * 4:
             if (!s->hash_computed) {
@@ -60,7 +60,7 @@ static void s5l8702_sha_write(void *opaque, hwaddr offset,
     S5L8702ShaState *s = S5L8702_SHA(opaque);
 
     switch (offset) {
-        case SHA_CONFIG:
+        case SHA1CONFIG:
             printf("SHA config: %08x\n", val);
             if (val == 0x2 || val == 0xa) {
                 if (val == 0x2) {
@@ -79,7 +79,7 @@ static void s5l8702_sha_write(void *opaque, hwaddr offset,
                 s->config = val;
             }
             break;
-        case SHA_RESET:
+        case SHA1RESET:
             printf("SHA reset: %08x\n", val);
             sha1_reset(s);
             break;
