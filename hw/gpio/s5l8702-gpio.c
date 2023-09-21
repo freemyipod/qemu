@@ -57,6 +57,9 @@ static uint64_t s5l8702_gpio_read(void *opaque, hwaddr offset,
     case S5L8702_GPIO_PDAT(15):
         r = s->pdat[port];
         printf("s5l8702_gpio_read: S5L8702_GPIO_PDAT%d = 0x%08x\n", port, r);
+        if (port == 6) {
+            r = 0x00;
+        }
         break;
     case S5L8702_GPIO_PUNA(0):
     case S5L8702_GPIO_PUNA(1):

@@ -64,7 +64,6 @@ typedef struct S5L8702AesState
 	uint32_t ctrl;
 	uint32_t unkreg0;
 	uint32_t unkreg1;
-	uint32_t operation;
 	uint32_t keylen;
 	uint32_t custkey[8]; 
 } S5L8702AesState;

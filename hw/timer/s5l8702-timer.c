@@ -161,7 +161,7 @@ static void s5l8702_timer_enable(S5L8702Timer *t, uint32_t tcmd) {
 
 static uint32_t s5l8702_timer_get_cnt(S5L8702Timer *t) {
     // FIXME: This is just a hack to get the BL booting further
-    t->tcnt += 16;
+    t->tcnt += 128;
     return t->tcnt;
 }
 

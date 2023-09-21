@@ -205,7 +205,8 @@ static uint64_t s5l8702_ata_read(void *opaque, hwaddr offset,
             printf("%s: ATA_PIO_CSD: 0x%08x\n", __func__, r);
             break;
         case ATA_PIO_DAD:
-            r = s->ata_pio_dad;
+//            r = s->ata_pio_dad;
+            r = 0x04;
             printf("%s: ATA_PIO_DAD: 0x%08x\n", __func__, r);
             break;
         case ATA_PIO_READY:
@@ -216,6 +217,12 @@ static uint64_t s5l8702_ata_read(void *opaque, hwaddr offset,
             break;
         case ATA_PIO_RDATA:
             r = s->ata_pio_rdata;
+            switch (s->ata_pio_csd) {
+                case 0xec: // WIN_IDENTIFY: ask drive to identify itself
+                    printf("%s: ATA_PIO_RDATA: WIN_IDENTIFY\n", __func__);
+                    r = 0x4000;
+                    break;
+            }
             printf("%s: ATA_PIO_RDATA: 0x%08x\n", __func__, r);
             break;
         case ATA_BUS_FIFO_STATUS:
@@ -470,7 +477,37 @@ static void s5l8702_ata_reset(DeviceState *dev)
     printf("s5l8702_ata_reset\n");
 
     /* Reset registers */
-
+    s->ata_control = 0;
+    s->ata_status = 0;
+    s->ata_command = 0;
+    s->ata_swrst = 0;
+    s->ata_irq = 0;
+    s->ata_irq_mask = 0;
+    s->ata_cfg = 0;
+    s->ata_mdma_time = 0;
+    s->ata_pio_time = 0;
+    s->ata_udma_time = 0;
+    s->ata_xfr_num = 0;
+    s->ata_xfr_cnt = 0;
+    s->ata_tbuf_start = 0;
+    s->ata_tbuf_size = 0;
+    s->ata_sbuf_start = 0;
+    s->ata_sbuf_size = 0;
+    s->ata_cadr_tbuf = 0;
+    s->ata_cadr_sbuf = 0;
+    s->ata_pio_dtr = 0;
+    s->ata_pio_fed = 0;
+    s->ata_pio_scr = 0;
+    s->ata_pio_llr = 0;
+    s->ata_pio_lmr = 0;
+    s->ata_pio_lhr = 0;
+    s->ata_pio_dvr = 0;
+    s->ata_pio_csd = 0;
+    s->ata_pio_dad = 0;
+    s->ata_pio_ready = 0;
+    s->ata_pio_rdata = 0;
+    s->ata_bus_fifo_status = 0;
+    s->ata_fifo_status = 0;
 }
 
 static void s5l8702_ata_init(Object *obj)
