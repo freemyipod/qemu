@@ -61,7 +61,7 @@ static void s5l8702_sha_write(void *opaque, hwaddr offset,
 
     switch (offset) {
         case SHA1CONFIG:
-            printf("SHA config: %08x\n", val);
+//            printf("SHA config: %08x\n", val);
             if (val == 0x2 || val == 0xa) {
                 if (val == 0x2) {
                     sha1_reset(s);
@@ -70,7 +70,7 @@ static void s5l8702_sha_write(void *opaque, hwaddr offset,
                 memcpy(s->buffer + s->buffer_len, s->inbuf, sizeof(s->inbuf));
                 s->buffer_len += sizeof(s->inbuf);
 
-                printf("Current length: %d\n", s->buffer_len);
+//                printf("Current length: %d\n", s->buffer_len);
 
                 memset(s->inbuf, 0, sizeof(s->inbuf));
 
@@ -80,11 +80,11 @@ static void s5l8702_sha_write(void *opaque, hwaddr offset,
             }
             break;
         case SHA1RESET:
-            printf("SHA reset: %08x\n", val);
+//            printf("SHA reset: %08x\n", val);
             sha1_reset(s);
             break;
         case SHA1IN ... SHA1IN + 16 * 4:
-            printf("SHA hw buffer[%d]: %08x\n", (offset - SHA1IN) / 4, val);
+//            printf("SHA hw buffer[%d]: %08x\n", (offset - SHA1IN) / 4, val);
             s->inbuf[(offset - SHA1IN) / 4] = val;
             break;
         default:

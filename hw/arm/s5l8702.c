@@ -136,8 +136,6 @@ static void s5l8702_realize(DeviceState *dev, Error **errp)
     s->lcd.sysmem = get_system_memory();
     s->lcd.nsas = cpu_get_address_space(CPU(&s->cpu), ARMASIdx_NS);
     allocate_ram(s->lcd.sysmem, "framebuffer", FRAMEBUFFER_MEM_BASE, align_64k_high(4 * 320 * 480));
-    uint8_t stuff[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-    address_space_rw(s->lcd.nsas, FRAMEBUFFER_MEM_BASE, MEMTXATTRS_UNSPECIFIED, (uint8_t *)stuff, 16, 1);
     sysbus_realize(SYS_BUS_DEVICE(&s->lcd), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->lcd), 0, S5L8702_LCD_BASE);
 

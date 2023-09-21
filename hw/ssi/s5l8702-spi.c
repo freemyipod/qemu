@@ -44,7 +44,7 @@ static uint64_t s5l8702_spi_read(void *opaque, hwaddr offset,
             s->spictrl |= BIT(1);
         }
         r = s->spictrl;
-        printf("%s: SPICTRL: 0x%08x\n", __func__, r);
+        //printf("%s: SPICTRL: 0x%08x\n", __func__, r);
         break;
     case SPISTATUS:
         r = s->spistatus;
@@ -54,15 +54,15 @@ static uint64_t s5l8702_spi_read(void *opaque, hwaddr offset,
         if (s->spisetup & 1) {
             r |= 0x3e00;
         }
-        printf("%s: SPISTATUS: 0x%08x\n", __func__, r);
+        //printf("%s: SPISTATUS: 0x%08x\n", __func__, r);
         break;
     case SPISETUP:
         r = s->spisetup;
-        printf("%s: SPISETUP: 0x%08x\n", __func__, r);
+        //printf("%s: SPISETUP: 0x%08x\n", __func__, r);
         break;
     case SPITXDATA:
         r = s->spitxdata;
-        printf("%s: SPITXDATA: 0x%08x\n", __func__, r);
+        //printf("%s: SPITXDATA: 0x%08x\n", __func__, r);
         break;
     case SPIRXDATA:
         s->spistatus &= ~SPISTATUS_RX_CNT;
@@ -70,7 +70,7 @@ static uint64_t s5l8702_spi_read(void *opaque, hwaddr offset,
             s->spirxdata = ssi_transfer(s->spi, 0xFF);
         }
         r = s->spirxdata;
-        printf("%s: SPIRXDATA: 0x%08x\n", __func__, r);
+        //printf("%s: SPIRXDATA: 0x%08x\n", __func__, r);
         break;
     default:
         qemu_log_mask(LOG_UNIMP, "%s: unimplemented read (offset 0x%04x)\n",
@@ -90,31 +90,31 @@ static void s5l8702_spi_write(void *opaque, hwaddr offset,
 
     switch (offset) {
     case SPICTRL:
-        printf("%s: SPICTRL: 0x%08x\n", __func__, (uint32_t) val);
+        //printf("%s: SPICTRL: 0x%08x\n", __func__, (uint32_t) val);
         s->spictrl = (uint32_t) val;
         if (s->spictrl & SPICTRL_CLRTX) {
             s->spictrl &= ~SPICTRL_CLRTX;
-            printf("%s: SPICTRL: clearing tx fifo...\n", __func__);
+            //printf("%s: SPICTRL: clearing tx fifo...\n", __func__);
             s->spistatus &= ~SPISTATUS_TX_CNT;
         }
         if (s->spictrl & SPICTRL_CLRRX) {
             s->spictrl &= ~SPICTRL_CLRRX;
-            printf("%s: SPICTRL: clearing rx fifo...\n", __func__);
+            //printf("%s: SPICTRL: clearing rx fifo...\n", __func__);
             s->spistatus &= ~SPISTATUS_RX_CNT;
         }
         break;
     case SPISETUP:
-        printf("%s: SPISETUP: 0x%08x\n", __func__, (uint32_t) val);
+        //printf("%s: SPISETUP: 0x%08x\n", __func__, (uint32_t) val);
         s->spisetup = (uint32_t) val;
         break;
     case SPITXDATA:
-        printf("%s: SPITXDATA: 0x%08x\n", __func__, (uint32_t) val);
+        //printf("%s: SPITXDATA: 0x%08x\n", __func__, (uint32_t) val);
         s->spitxdata = (uint32_t) val;
         s->spirxdata = ssi_transfer(s->spi, s->spitxdata);
         s->spistatus |= SPISTATUS_RX_CNT;
         break;
     case SPIRXLIMIT:
-        printf("%s: SPIRXLIMIT: 0x%08x\n", __func__, (uint32_t) val);
+        //printf("%s: SPIRXLIMIT: 0x%08x\n", __func__, (uint32_t) val);
         break;
     default:
         qemu_log_mask(LOG_UNIMP, "%s: unimplemented write (offset 0x%04x, value 0x%08x)\n",

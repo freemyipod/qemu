@@ -157,9 +157,9 @@ static uint64_t s5l8702_jpeg_read(void *opaque, hwaddr offset,
     case JPEG_UNK1:
         r = 0xFFFFFFFF;
         break;
-    default:
-        qemu_log_mask(LOG_UNIMP, "%s: unimplemented read (offset 0x%04x)\n",
-                      __func__, (uint32_t) offset);
+//    default:
+//        qemu_log_mask(LOG_UNIMP, "%s: unimplemented read (offset 0x%04x)\n",
+//                      __func__, (uint32_t) offset);
     }
 
     return r;
@@ -191,13 +191,13 @@ static void s5l8702_jpeg_write(void *opaque, hwaddr offset,
             uint8_t *cbplane = malloc(sizeof(uint8_t) * 320 * 240);
             uint8_t *crplane = malloc(sizeof(uint8_t) * 320 * 240);
 
-            MemTxResult result = address_space_read(s->nsas, s->regs[JPEG_REG_COEFF_BLOCKS/4] ^ 0x80000000, MEMTXATTRS_UNSPECIFIED, mcu, sizeof(EncodedMCU) * 300);
+            address_space_read(s->nsas, s->regs[JPEG_REG_COEFF_BLOCKS/4], MEMTXATTRS_UNSPECIFIED, mcu, sizeof(EncodedMCU) * 300);
 
             s5l8702_jpeg_decode(mcu, s->qtable1, s->qtable2, yplane, cbplane, crplane);
 
-            address_space_write(s->nsas, (s->regs[JPEG_REG_OUT_CRPLANE/4] + 0x10000) ^ 0x80000000, MEMTXATTRS_UNSPECIFIED, yplane, 320 * 240);
-            address_space_write(s->nsas, (s->regs[JPEG_REG_OUT_CRPLANE/4] + 0x10000 + 0x12C00) ^ 0x80000000, MEMTXATTRS_UNSPECIFIED, cbplane, 160 * 120);
-            address_space_write(s->nsas, (s->regs[JPEG_REG_OUT_CRPLANE/4] + 0x10000 + 0x12C00 + 0x4B00) ^ 0x80000000, MEMTXATTRS_UNSPECIFIED, crplane, 160 * 120);
+            address_space_write(s->nsas, (s->regs[JPEG_REG_OUT_CRPLANE/4] + 0x10000), MEMTXATTRS_UNSPECIFIED, yplane, 320 * 240);
+            address_space_write(s->nsas, (s->regs[JPEG_REG_OUT_CRPLANE/4] + 0x10000 + 0x12C00), MEMTXATTRS_UNSPECIFIED, cbplane, 160 * 120);
+            address_space_write(s->nsas, (s->regs[JPEG_REG_OUT_CRPLANE/4] + 0x10000 + 0x12C00 + 0x4B00), MEMTXATTRS_UNSPECIFIED, crplane, 160 * 120);
 
             free(mcu);
             free(yplane);
