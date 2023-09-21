@@ -28,6 +28,10 @@ struct S5L8702LcdState {
     uint32_t phtime;
     uint32_t wdata;
 
+    uint8_t address_latches;
+    uint16_t sc, ec, sp, ep;
+
+
     QemuConsole *con;
 
     bool invalidate;

@@ -153,6 +153,7 @@ static void s5l8702_lcd_write(void *opaque, hwaddr offset,
                     break;
                 case 0x2c:
                     s->memcnt = 0;
+                    s->address_latches = 0;
                     break;
                 case 0x28:
                     printf("DISPLAY OFF\n");
@@ -187,25 +188,45 @@ static void s5l8702_lcd_write(void *opaque, hwaddr offset,
         case LCD_WDATA:
             s->lcd_wdata = val;
             switch(s->lcd_wcmd) {
-                case 0x2A:
-                    printf("LCD GOT 0x2A: %04x\n", val);
-                    break;
-                case 0x2B:
-                    printf("LCD GOT 0x2B: %04x\n", val);
-                    break;
-                case 0x2C:
-                    address_space_rw(s->nsas, 0xfe00000 + s->memcnt, MEMTXATTRS_UNSPECIFIED, &val, 2, 1);
-                    s->invalidate = true;
-                    // printf("FB writing %08x to %08x\n", val, s->memcnt);
-                    s->memcnt += 2;
-                    break;
-                case 0x3A:
-                    printf("LCD GOT 0x3A: %04x\n", val);
-                    break;
-                default:
-                    s->lcd_regs[s->lcd_wcmd] = s->lcd_regs[s->lcd_wcmd] << 8 | (val & 0xFF);
-                    // fprintf(stderr, "LCD Register 0x%02x = 0x%016llx\n", s->lcd_wcmd, s->lcd_regs[s->lcd_wcmd]);
-                    break;
+            case 0x2A:
+                if(s->address_latches < 2) s->sc = (s->sc << 8) | val;
+                else s->ec = (s->ec << 8) | val;
+                s->address_latches++;
+                if(s->address_latches == 4) {
+                    s->address_latches = 0;
+                    printf("LCD GOT 0x2A: sc=%04x ec=%04x\n", s->sc, s->ec);
+                }
+                break;
+            case 0x2B:
+                if(s->address_latches < 2) s->sp = (s->sp << 8) | val;
+                else s->ep = (s->ep << 8) | val;
+                s->address_latches++;
+                if(s->address_latches == 4) {
+                    s->address_latches = 0;
+                    printf("LCD GOT 0x2B: sp=%04x ep=%04x\n", s->sp, s->ep);
+                }
+
+                break;
+            case 0x2C:
+                uint32_t address;
+                // this simulates writing pixels as if we were a ILI9341. we start at the top left corner of the column and page defined by sc and sp
+                // and write pixels until we reach the bottom right corner of the column and page defined by ec and ep. we keep track of the current
+                // pixel we're on with s->memcnt and increment it every time we write a pixel. we use this to calculate the address of the pixel we're
+                // writing to in the framebuffer. if we reach the end of the page (memcnt > ec - sc) we increment the page and reset the column.
+
+                address = (s->sp * 320) + s->sc + s->memcnt;
+                if(s->memcnt > s->ec - s->sc) {
+                    s->sp++;
+                    // s->sc = 0;
+                    s->memcnt = 0;
+                    address = (s->sp * 320) + s->sc + s->memcnt;
+                }
+                
+                cpu_physical_memory_write(0xfe00000 + address * 2, &val, 2);
+                s->invalidate = true;
+                // printf("FB writing %08x to %08x\n", val, 0xfe00000 + address * 2);
+                s->memcnt++;
+                break;
             }
             break;
         default:
