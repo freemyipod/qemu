@@ -138,23 +138,23 @@ again:
             dest_id = (ch->conf >> 6) & 0x1f;
             size = ch->ctrl & 0xfff;
             req = s->req_single | s->req_burst;
-            switch (flow) {
-            case 0:
-                break;
-            case 1:
-                if ((req & (1u << dest_id)) == 0)
-                    size = 0;
-                break;
-            case 2:
-                if ((req & (1u << src_id)) == 0)
-                    size = 0;
-                break;
-            case 3:
-                if ((req & (1u << src_id)) == 0
-                        || (req & (1u << dest_id)) == 0)
-                    size = 0;
-                break;
-            }
+//            switch (flow) {
+//            case 0:
+//                break;
+//            case 1:
+//                if ((req & (1u << dest_id)) == 0)
+//                    size = 0;
+//                break;
+//            case 2:
+//                if ((req & (1u << src_id)) == 0)
+//                    size = 0;
+//                break;
+//            case 3:
+//                if ((req & (1u << src_id)) == 0
+//                        || (req & (1u << dest_id)) == 0)
+//                    size = 0;
+//                break;
+//            }
             if (!size)
                 continue;
 
@@ -212,6 +212,7 @@ again:
         if (--s->running)
             s->running = 1;
     }
+    pl080_update(s);
 }
 
 static uint64_t pl080_read(void *opaque, hwaddr offset,
