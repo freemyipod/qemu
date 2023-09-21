@@ -44,7 +44,7 @@ static uint64_t s5l8702_lcd_read(void *opaque, hwaddr offset,
             r = s->lcd_intcon;
             break;
         case LCD_STATUS:
-            r = 0x00000002; // Firmware waits for bit 1
+            r = (1<<0) | (1<<1); // read operation is always done (bit 0) and the fifo is always empty (bit 1)
             break;
         case LCD_PHTIME:
             r = s->lcd_phtime;
