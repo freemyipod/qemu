@@ -91,7 +91,7 @@
 static uint64_t s5l8702_ata_read(void *opaque, hwaddr offset,
                                  unsigned size)
 {
-    const S5L8702AtaState *s = S5L8702_ATA(opaque);
+    S5L8702AtaState *s = S5L8702_ATA(opaque);
     uint32_t r = 0;
 
     switch (offset) {
@@ -172,42 +172,41 @@ static uint64_t s5l8702_ata_read(void *opaque, hwaddr offset,
             r = s->ata_cadr_sbuf;
             printf("%s: ATA_CADR_SBUF: 0x%08x\n", __func__, r);
             break;
-        case ATA_PIO_DTR:
-            r = s->ata_pio_dtr;
-            printf("%s: ATA_PIO_DTR: 0x%08x\n", __func__, r);
+        case ATA_PIO_DTR: // This register is used to read the data the hdd sends in return of the CSD register WRITE!!!
+            printf("%s: ATA_PIO_DTR\n", __func__);
+            s->last_reg_read = offset;
             break;
         case ATA_PIO_FED:
-            r = s->ata_pio_fed;
-            printf("%s: ATA_PIO_FED: 0x%08x\n", __func__, r);
+            printf("%s: ATA_PIO_FED\n", __func__);
+            s->last_reg_read = offset;
             break;
         case ATA_PIO_SCR:
-            r = s->ata_pio_scr;
-            printf("%s: ATA_PIO_SCR: 0x%08x\n", __func__, r);
+            printf("%s: ATA_PIO_SCR\n", __func__);
+            s->last_reg_read = offset;
             break;
         case ATA_PIO_LLR:
-            r = s->ata_pio_llr;
-            printf("%s: ATA_PIO_LLR: 0x%08x\n", __func__, r);
+            printf("%s: ATA_PIO_LLR\n", __func__);
+            s->last_reg_read = offset;
             break;
         case ATA_PIO_LMR:
-            r = s->ata_pio_lmr;
-            printf("%s: ATA_PIO_LMR: 0x%08x\n", __func__, r);
+            printf("%s: ATA_PIO_LMR\n", __func__);
+            s->last_reg_read = offset;
             break;
         case ATA_PIO_LHR:
-            r = s->ata_pio_lhr;
-            printf("%s: ATA_PIO_LHR: 0x%08x\n", __func__, r);
+            printf("%s: ATA_PIO_LHR\n", __func__);
+            s->last_reg_read = offset;
             break;
         case ATA_PIO_DVR:
-            r = s->ata_pio_dvr;
-            printf("%s: ATA_PIO_DVR: 0x%08x\n", __func__, r);
+            printf("%s: ATA_PIO_DVR\n", __func__);
+            s->last_reg_read = offset;
             break;
-        case ATA_PIO_CSD:
-            r = s->ata_pio_csd;
-            printf("%s: ATA_PIO_CSD: 0x%08x\n", __func__, r);
+        case ATA_PIO_CSD: // When read, RDATA contains status register
+            printf("%s: ATA_PIO_CSD\n", __func__);
+            s->last_reg_read = offset;
             break;
-        case ATA_PIO_DAD:
-//            r = s->ata_pio_dad;
-            r = 0x04;
-            printf("%s: ATA_PIO_DAD: 0x%08x\n", __func__, r);
+        case ATA_PIO_DAD: // When read, RDATA contains alternate status register (status register mirror)
+            printf("%s: ATA_PIO_DAD\n", __func__);
+            s->last_reg_read = offset;
             break;
         case ATA_PIO_READY:
 //            r = s->ata_pio_ready;
@@ -216,11 +215,14 @@ static uint64_t s5l8702_ata_read(void *opaque, hwaddr offset,
             printf("%s: ATA_PIO_READY: 0x%08x\n", __func__, r);
             break;
         case ATA_PIO_RDATA:
-            r = s->ata_pio_rdata;
-            switch (s->ata_pio_csd) {
-                case 0xec: // WIN_IDENTIFY: ask drive to identify itself
-                    printf("%s: ATA_PIO_RDATA: WIN_IDENTIFY\n", __func__);
-                    r = 0x4000;
+            switch (s->last_reg_read) {
+                case ATA_PIO_CSD: // Status Register
+                    printf("%s: ATA_PIO_RDATA: ATA_PIO_CSD\n", __func__);
+                    r = (1 << 6) | (s->drq << 3); // RDY, DRQ
+                    break;
+                case ATA_PIO_DAD: // Alternate Status Register
+                    printf("%s: ATA_PIO_RDATA: ATA_PIO_DAD\n", __func__);
+                    r = (1 << 6) | (s->drq << 3); // RDY, DRQ
                     break;
             }
             printf("%s: ATA_PIO_RDATA: 0x%08x\n", __func__, r);
@@ -437,6 +439,15 @@ static void s5l8702_ata_write(void *opaque, hwaddr offset,
         case ATA_PIO_CSD:
             printf("%s: ATA_PIO_CSD: 0x%08x\n", __func__, (uint32_t) val);
             s->ata_pio_csd = (uint32_t) val;
+            s->drq = 1;
+            switch (s->ata_pio_csd) {
+                case 0xec: // Identify
+                    s->remaining_rdata = 0x100;
+                    break;
+                default:
+                    printf("%s: ATA_PIO_CSD: Unknown command\n", __func__);
+                    break;
+            }
             break;
         case ATA_PIO_DAD:
             printf("%s: ATA_PIO_DAD: 0x%08x\n", __func__, (uint32_t) val);
@@ -477,7 +488,7 @@ static void s5l8702_ata_reset(DeviceState *dev)
     printf("s5l8702_ata_reset\n");
 
     /* Reset registers */
-    s->ata_control = 0;
+    s->ata_control = (1 << 1); // clk_down_ready
     s->ata_status = 0;
     s->ata_command = 0;
     s->ata_swrst = 0;

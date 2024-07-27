@@ -16,6 +16,11 @@ struct S5L8702AtaState {
     /*< public >*/
     MemoryRegion iomem;
 
+    uint32_t last_reg_read;
+    uint32_t ata_pio_csd_read;
+    uint32_t remaining_rdata;
+    uint8_t drq;
+
     uint32_t ata_control;
     uint32_t ata_status;
     uint32_t ata_command;
