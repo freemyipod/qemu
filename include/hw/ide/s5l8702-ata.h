@@ -3,6 +3,8 @@
 
 #include "qom/object.h"
 #include "hw/sysbus.h"
+#include "hw/block/block.h"
+#include "hw/ide/internal.h"
 
 #define TYPE_S5L8702_ATA    "s5l8702-ata"
 OBJECT_DECLARE_SIMPLE_TYPE(S5L8702AtaState, S5L8702_ATA)
@@ -15,6 +17,8 @@ struct S5L8702AtaState {
 
     /*< public >*/
     MemoryRegion iomem;
+    IDEBus bus;
+    IDEDevice *device;
 
     uint32_t last_reg_read;
     uint32_t ata_pio_csd_read;
@@ -53,5 +57,7 @@ struct S5L8702AtaState {
     uint32_t ata_bus_fifo_status;
     uint32_t ata_fifo_status;
 };
+
+void s5l8702_ata_set_drive_info(S5L8702AtaState *s, DriveInfo *i);
 
 #endif /* HW_MISC_S5L8702_ATA_H */

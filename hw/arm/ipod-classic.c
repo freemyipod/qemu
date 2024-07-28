@@ -83,19 +83,28 @@ static void ipod_classic_machine_init(MachineState *machine)
 
     /* Connect an SPI flash to SPI0 */
     DeviceState *flash_dev = qdev_new("sst25vf080b"); // According to https://freemyipod.org/wiki/Classic_3G
-    DriveInfo *dinfo = drive_get(IF_MTD, 0, 0);
-    if (!dinfo) {
+    DriveInfo *flash_info = drive_get_by_index(IF_MTD, 0);
+    if (!flash_info) {
         printf("NOR image not found\n");
         exit(1);
     }
 
     printf("Loaded NOR image\n");
-    qdev_prop_set_drive_err(flash_dev, "drive", blk_by_legacy_dinfo(dinfo), &error_fatal);
+    qdev_prop_set_drive(flash_dev, "drive", blk_by_legacy_dinfo(flash_info));
     qdev_realize_and_unref(flash_dev, BUS(s->soc.spi[0].spi), &error_fatal);
 
     qemu_irq flash_cs = qdev_get_gpio_in_named(flash_dev, SSI_GPIO_CS, 0);
     qdev_connect_gpio_out(DEVICE(&s->soc.gpio), 0, flash_cs);
 
+    /* Connect an IDE HDD to s5l8702-ata */
+    DriveInfo *hdd_info = drive_get_by_index(IF_IDE, 0);
+    if (!hdd_info) {
+        printf("HDD image not found\n");
+        exit(1);
+    }
+    printf("Setting drive to ata peripheral\n");
+    s5l8702_ata_set_drive_info(&s->soc.ata, hdd_info);
+    
     /* PCF5063x */
     // object_initialize_child(OBJECT(s), "pcf5063x", &s->pcf5063x, TYPE_PCF5063X);
     i2c_slave_create_simple(s->soc.i2c[0].bus, TYPE_PCF5063X, 0x73);

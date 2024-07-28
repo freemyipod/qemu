@@ -173,8 +173,12 @@ static uint64_t s5l8702_ata_read(void *opaque, hwaddr offset,
             printf("%s: ATA_CADR_SBUF: 0x%08x\n", __func__, r);
             break;
         case ATA_PIO_DTR: // This register is used to read the data the hdd sends in return of the CSD register WRITE!!!
-            printf("%s: ATA_PIO_DTR\n", __func__);
+            printf("%s: ATA_PIO_DTR (remaining RDATA: %d)\n", __func__, s->remaining_rdata);
             s->last_reg_read = offset;
+            s->remaining_rdata--;
+            if (s->remaining_rdata == 0) {
+                s->drq = 0;
+            }
             break;
         case ATA_PIO_FED:
             printf("%s: ATA_PIO_FED\n", __func__);
@@ -521,6 +525,12 @@ static void s5l8702_ata_reset(DeviceState *dev)
     s->ata_fifo_status = 0;
 }
 
+void s5l8702_ata_set_drive_info(S5L8702AtaState *s, DriveInfo *i)
+{
+    printf("s5l8702_ata_set_drive_info: %p\n", i);
+    ide_bus_create_drive(&s->bus, 0, i);
+}
+
 static void s5l8702_ata_init(Object *obj)
 {
     S5L8702AtaState *s = S5L8702_ATA(obj);
@@ -530,13 +540,18 @@ static void s5l8702_ata_init(Object *obj)
     /* Memory mapping */
     memory_region_init_io(&s->iomem, OBJECT(s), &s5l8702_ata_ops, s, TYPE_S5L8702_ATA, S5L8702_ATA_SIZE);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
+
+    ide_bus_init(&s->bus, sizeof(s->bus), DEVICE(obj), 0, 1);
 }
 
 static void s5l8702_ata_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
+    printf("s5l8702_ata_class_init\n");
+
     dc->reset = s5l8702_ata_reset;
+    set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
 }
 
 static const TypeInfo s5l8702_ata_types[] = {
