@@ -3,6 +3,7 @@
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "hw/misc/s5l8702-sha.h"
+#include "trace.h"
 
 #define SHA1CONFIG  0x0000
 #define SHA1RESET   0x0004
@@ -23,8 +24,7 @@ static void sha1_reset(S5L8702ShaState *s) {
     s->hash_computed = false;
 }
 
-static uint64_t s5l8702_sha_read(void *opaque, hwaddr offset,
-                                 unsigned size) {
+static uint64_t s5l8702_sha_read(void *opaque, hwaddr offset, unsigned size) {
     S5L8702ShaState *s = S5L8702_SHA(opaque);
 
     switch (offset) {
@@ -36,7 +36,6 @@ static uint64_t s5l8702_sha_read(void *opaque, hwaddr offset,
             if (!s->hash_computed) {
                 // lazy compute the final hash by inspecting the last eight bytes of the buffer, which contains the length of the input data.
                 uint64_t data_length = swapLong(((uint64_t *) s->buffer)[s->buffer_len / 8 - 1]) / 8;
-                printf("SHA1: data length %d\n", data_length);
 
                 SHA_CTX ctx;
                 SHA1_Init(&ctx);
@@ -60,7 +59,6 @@ static void s5l8702_sha_write(void *opaque, hwaddr offset,
 
     switch (offset) {
         case SHA1CONFIG:
-//            printf("SHA config: %08x\n", val);
             if (val == 0x2 || val == 0xa) {
                 if (val == 0x2) {
                     sha1_reset(s);
@@ -69,7 +67,6 @@ static void s5l8702_sha_write(void *opaque, hwaddr offset,
                 memcpy(s->buffer + s->buffer_len, s->inbuf, sizeof(s->inbuf));
                 s->buffer_len += sizeof(s->inbuf);
 
-//                printf("Current length: %d\n", s->buffer_len);
 
                 memset(s->inbuf, 0, sizeof(s->inbuf));
 
@@ -79,11 +76,9 @@ static void s5l8702_sha_write(void *opaque, hwaddr offset,
             }
             break;
         case SHA1RESET:
-//            printf("SHA reset: %08x\n", val);
             sha1_reset(s);
             break;
         case SHA1IN ... SHA1IN + 16 * 4:
-//            printf("SHA hw buffer[%d]: %08x\n", (offset - SHA1IN) / 4, val);
             s->inbuf[(offset - SHA1IN) / 4] = val;
             break;
         default:
@@ -101,7 +96,7 @@ static const MemoryRegionOps s5l8702_sha_ops = {
 static void s5l8702_sha_reset(DeviceState *dev) {
     S5L8702ShaState *s = S5L8702_SHA(dev);
 
-    printf("s5l8702_sha_reset\n");
+    trace_s5l8702_sha_reset();
 
     s->config = 0;
     memset(s->inbuf, 0, sizeof(s->inbuf));
@@ -111,7 +106,7 @@ static void s5l8702_sha_reset(DeviceState *dev) {
 static void s5l8702_sha_init(Object *obj) {
     S5L8702ShaState *s = S5L8702_SHA(obj);
 
-    printf("s5l8702_sha_init\n");
+    trace_s5l8702_sha_init();
 
     /* Memory mapping */
     memory_region_init_io(&s->iomem, OBJECT(s), &s5l8702_sha_ops, s, TYPE_S5L8702_SHA, S5L8702_SHA_SIZE);

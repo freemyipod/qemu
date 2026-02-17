@@ -279,3 +279,35 @@ virt_ctrl_instance_init(void *dev) "ctrl: %p"
 lasi_chip_mem_valid(uint64_t addr, uint32_t val) "access to addr 0x%"PRIx64" is %d"
 lasi_chip_read(uint64_t addr, uint32_t val) "addr 0x%"PRIx64" val 0x%08x"
 lasi_chip_write(uint64_t addr, uint32_t val) "addr 0x%"PRIx64" val 0x%08x"
+
+# s5l8702-lcd.c
+s5l8702_lcd_write(const char *name, uint32_t val) "%s = 0x%08x"
+s5l8702_lcd_action(const char *action, uint32_t val) "%s 0x%08x"
+s5l8702_lcd_reset(void) "reset"
+s5l8702_lcd_init(void) "init"
+
+# s5l8702-aes.c
+s5l8702_aes_write(uint32_t offset, uint32_t value) "offset 0x%08x = 0x%08x"
+s5l8702_aes_operation(const char *op, uint32_t size, uint32_t inaddr, uint32_t outaddr) "%s %d bytes from 0x%08x to 0x%08x"
+s5l8702_aes_no_support(const char *keytype) "%s key"
+s5l8702_aes_reset(void) "reset"
+s5l8702_aes_init(void) "init"
+
+# s5l8702-clk.c
+s5l8702_clk_reset(void) "reset"
+s5l8702_clk_init(void) "init"
+
+# s5l8702-jpeg.c
+s5l8702_jpeg_reset(void) "reset"
+s5l8702_jpeg_init(void) "init"
+
+# s5l8702-sha.c
+s5l8702_sha_reset(void) "reset"
+s5l8702_sha_init(void) "init"
+
+# pcf5063x.c
+pcf5063x_read(uint8_t addr, uint8_t value) "read addr 0x%02x: 0x%02x"
+pcf5063x_write(uint8_t addr, uint8_t value) "write addr 0x%02x: 0x%02x"
+pcf5063x_unknown_read(uint8_t addr) "unknown read addr 0x%02x"
+pcf5063x_unknown_write(uint8_t addr) "unknown write addr 0x%02x"
+

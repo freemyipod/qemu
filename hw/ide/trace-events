@@ -123,3 +123,9 @@ handle_cmd_fis_dump(void *s, int port, const char *fis) "ahci(%p)[%d]: %s"
 # ahci-allwinner.c
 allwinner_ahci_mem_read(void *s, void *a, uint64_t addr, uint64_t val, unsigned size) "ahci(%p): read a=%p addr=0x%"PRIx64" val=0x%"PRIx64", size=%d"
 allwinner_ahci_mem_write(void *s, void *a, uint64_t addr, uint64_t val, unsigned size) "ahci(%p): write a=%p addr=0x%"PRIx64" val=0x%"PRIx64", size=%d"
+
+# s5l8702-ata.c
+s5l8702_ata_class_init(void)
+s5l8702_ata_init(void)
+s5l8702_ata_reset(void)
+s5l8702_ata_set_drive_info(void* i) "IDE drive info: %p"

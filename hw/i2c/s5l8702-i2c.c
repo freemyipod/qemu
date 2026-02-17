@@ -4,12 +4,7 @@
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "hw/i2c/s5l8702-i2c.h"
-
-#if 0
-#define I2C_LOG printf
-#else
-#define I2C_LOG(...)
-#endif
+#include "trace.h"
 
 #define S5L8702_I2C_IICCON      0x00
 #define S5L8702_I2C_IICSTAT     0x04
@@ -54,36 +49,36 @@ static uint64_t s5l8702_i2c_read(void *opaque, hwaddr offset,
     switch (offset) {
     case S5L8702_I2C_IICCON:
         r = s->iiccon;
-        I2C_LOG("s5l8702_i2c_read: IICCON = 0x%08x\n", r);
+        trace_s5l8702_i2c_read("IICCON", r);
         break;
     case S5L8702_I2C_IICSTAT:
         r = s->iicstat;
         r &= ~S5L8702_I2C_IICSTAT_MODE_BB; // The virtualized i2c peripheral is never busy 😎
-        I2C_LOG("s5l8702_i2c_read: IICSTAT = 0x%08x\n", r);
+        trace_s5l8702_i2c_read("IICSTAT", r);
         break;
     case S5L8702_I2C_IICADD:
         r = s->iicadd;
-        I2C_LOG("s5l8702_i2c_read: IICADD = 0x%08x\n", r);
+        trace_s5l8702_i2c_read("IICADD", r);
         break;
     case S5L8702_I2C_IICDS:
         r = s->iicds;
-        printf("s5l8702_i2c_read: IICDS = 0x%08x\n", r);
+        trace_s5l8702_i2c_read("IICDS", r);
         break;
     case S5L8702_I2C_IIUNK10:
         r = s->iicunk10;
-        I2C_LOG("s5l8702_i2c_read: IIUNK10 = 0x%08x\n", r);
+        trace_s5l8702_i2c_read("IIUNK10", r);
         break;
     case S5L8702_I2C_IIUNK14:
         r = s->iicunk14;
-        I2C_LOG("s5l8702_i2c_read: IIUNK14 = 0x%08x\n", r);
+        trace_s5l8702_i2c_read("IIUNK14", r);
         break;
     case S5L8702_I2C_IIUNK18:
         r = s->iicunk18;
-        I2C_LOG("s5l8702_i2c_read: IIUNK18 = 0x%08x\n", r);
+        trace_s5l8702_i2c_read("IIUNK18", r);
         break;
     case S5L8702_I2C_IICSTAT2:
         r = s->iicstat2;
-        I2C_LOG("s5l8702_i2c_read: IICSTAT2 = 0x%08x\n", r);
+        trace_s5l8702_i2c_read("IICSTAT2", r);
         break;
     default:
         qemu_log_mask(LOG_UNIMP, "%s: unimplemented read (offset 0x%04x)\n",
@@ -100,21 +95,19 @@ static void s5l8702_i2c_write(void *opaque, hwaddr offset,
 
     switch (offset) {
     case S5L8702_I2C_IICCON:
-        I2C_LOG("s5l8702_i2c_write: IICCON = 0x%08x\n", (uint32_t) val);
+        trace_s5l8702_i2c_write("IICCON", (uint32_t) val);
         s->iiccon = (uint32_t) val;
 
-        // I2C_LOG("s5l8702_i2c_write: IICCON: ACK_GEN = %d\n", (val & S5L8702_I2C_IICCON_ACK_GEN) >> 7);
-        // I2C_LOG("s5l8702_i2c_write: IICCON: CKSEL = %d\n", (val & S5L8702_I2C_IICCON_CKSEL) >> 6);
-        // I2C_LOG("s5l8702_i2c_write: IICCON: INT_EN = %d\n", (val & S5L8702_I2C_IICCON_IRQ) >> 4);
-        // I2C_LOG("s5l8702_i2c_write: IICCON: CK_REG = %d\n", (val & S5L8702_I2C_IICCON_CK_REG_MASK) >> 0);
+        // trace_s5l8702_i2c_write("IICCON"%d\n", (val & S5L8702_I2C_IICCON_ACK_GEN) >> 7);
+        // trace_s5l8702_i2c_write("IICCON"\n", (val & S5L8702_I2C_IICCON_CKSEL) >> 6);
+        // trace_s5l8702_i2c_write("IICCON"d\n", (val & S5L8702_I2C_IICCON_IRQ) >> 4);
+        // trace_s5l8702_i2c_write("IICCON"d\n", (val & S5L8702_I2C_IICCON_CK_REG_MASK) >> 0);
 
         if (s->iiccon & S5L8702_I2C_IICCON_IRQ) {
             s->iiccon &= ~S5L8702_I2C_IICCON_IRQ;
 
             if ((s->iicstat & 0xF0) == 0xF0) { // Resume TX
-                I2C_LOG("s5l8702_i2c_write: IICCON: resume tx\n");
                 int ack = i2c_send(s->bus, (uint8_t) s->iicds);
-                // I2C_LOG("s5l8702_i2c_write: IICCON: ack = %d\n", ack);
                 if (ack) {
                     s->iicstat |= 1; // Set NACK signal
                 } else {
@@ -125,16 +118,13 @@ static void s5l8702_i2c_write(void *opaque, hwaddr offset,
             }
 
             if ((s->iicstat & 0xF0) == 0xD0) { // Stop TX
-                I2C_LOG("s5l8702_i2c_write: IICCON: stop tx\n");
                 i2c_end_transfer(s->bus);
                 s->iiccon |= S5L8702_I2C_IICCON_IRQ; // Set IRQ signal
                 s->iicstat2 |= BIT(8); // Set transfer done? CHECKME!
             }
 
             if ((s->iicstat & 0xF0) == 0xB0) { // Resume RX
-                I2C_LOG("s5l8702_i2c_write: IICCON: resume rx\n");
                 s->iicds = i2c_recv(s->bus);
-                // I2C_LOG("s5l8702_i2c_write: IICCON: data = 0x%02x\n", s->iicds);
                 s->iicstat &= ~1; // Clear NACK signal
 
                 s->iiccon |= S5L8702_I2C_IICCON_IRQ; // Set IRQ signal
@@ -142,7 +132,6 @@ static void s5l8702_i2c_write(void *opaque, hwaddr offset,
             }
 
             if ((s->iicstat & 0xF0) == 0x90) { // Stop RX
-                I2C_LOG("s5l8702_i2c_write: IICCON: stop rx\n");
                 i2c_end_transfer(s->bus);
                 s->iiccon |= S5L8702_I2C_IICCON_IRQ; // Set IRQ signal
                 s->iicstat2 |= BIT(8); // Set transfer done? CHECKME!
@@ -151,16 +140,10 @@ static void s5l8702_i2c_write(void *opaque, hwaddr offset,
 
         break;
     case S5L8702_I2C_IICSTAT:
-        I2C_LOG("s5l8702_i2c_write: IICSTAT = 0x%08x\n", (uint32_t) val);
-
-        // I2C_LOG("s5l8702_i2c_write: IICSTAT: MODE_SEL = 0x%02x\n", (uint8_t) ((val & S5L8702_I2C_IICSTAT_MODE_SEL_MASK) >> 6));
-        // I2C_LOG("s5l8702_i2c_write: IICSTAT: BB = %d\n", (val & S5L8702_I2C_IICSTAT_MODE_BB) >> 5);
-        // I2C_LOG("s5l8702_i2c_write: IICSTAT: SOE = %d\n", (val & S5L8702_I2C_IICSTAT_MODE_SOE) >> 4);
+        trace_s5l8702_i2c_write("IICSTAT", (uint32_t) val);
 
         if ((val & 0xF0) == 0xF0) {
-            I2C_LOG("s5l8702_i2c_write: IICSTAT: start tx, slave address = 0x%02x\n", ((uint8_t) s->iicds) >> 1);
             int ack = i2c_start_send(s->bus, ((uint8_t) s->iicds) >> 1);
-            // I2C_LOG("s5l8702_i2c_write: IICSTAT: ack = %d\n", ack);
             if (ack) {
                 val |= S5L8702_I2C_IICSTAT_MODE_LRB; // Set NACK signal
             } else {
@@ -171,15 +154,12 @@ static void s5l8702_i2c_write(void *opaque, hwaddr offset,
         }
         
         if ((val & 0xF0) == 0xD0) {
-            // I2C_LOG("s5l8702_i2c_write: IICSTAT: stop tx\n");
             s->iiccon |= S5L8702_I2C_IICCON_IRQ; // Set IRQ signal
             s->iicstat2 |= BIT(8); // Set transfer done? CHECKME!
         }
 
         if ((val & 0xF0) == 0xB0) {
-            I2C_LOG("s5l8702_i2c_write: IICSTAT: start rx, slave address = 0x%02x\n", ((uint8_t) s->iicds) >> 1);
             int ack = i2c_start_recv(s->bus, ((uint8_t) s->iicds) >> 1);
-            // I2C_LOG("s5l8702_i2c_write: IICSTAT: ack = %d\n", ack);
             if (ack) {
                 val |= 1; // Set NACK signal
             } else {
@@ -190,7 +170,6 @@ static void s5l8702_i2c_write(void *opaque, hwaddr offset,
         }
         
         if ((val & 0xF0) == 0x90) {
-            // I2C_LOG("s5l8702_i2c_write: IICSTAT: stop rx\n");
             s->iiccon |= S5L8702_I2C_IICCON_IRQ; // Set IRQ signal
             s->iicstat2 |= BIT(8); // Set transfer done? CHECKME!
         }
@@ -199,28 +178,28 @@ static void s5l8702_i2c_write(void *opaque, hwaddr offset,
         s->iicstat = (uint32_t) val;
         break;
     case S5L8702_I2C_IICADD:
-        I2C_LOG("s5l8702_i2c_write: IICADD = 0x%08x\n", (uint32_t) val);
+        trace_s5l8702_i2c_write("IICADD", (uint32_t) val);
         // TODO: Only writeable when serial output is disabled!
         s->iicadd = (uint32_t) val;
         break;
     case S5L8702_I2C_IICDS:
-        I2C_LOG("s5l8702_i2c_write: IICDS = 0x%08x\n", (uint32_t) val);
+        trace_s5l8702_i2c_write("IICDS", (uint32_t) val);
         s->iicds = (uint32_t) val;
         break;
     case S5L8702_I2C_IIUNK10:
-        I2C_LOG("s5l8702_i2c_write: IIUNK10 = 0x%08x\n", (uint32_t) val);
+        trace_s5l8702_i2c_write("IIUNK10", (uint32_t) val);
         s->iicunk10 = (uint32_t) val;
         break;
     case S5L8702_I2C_IIUNK14:
-        I2C_LOG("s5l8702_i2c_write: IIUNK14 = 0x%08x\n", (uint32_t) val);
+        trace_s5l8702_i2c_write("IIUNK14", (uint32_t) val);
         s->iicunk14 = (uint32_t) val;
         break;
     case S5L8702_I2C_IIUNK18:
-        I2C_LOG("s5l8702_i2c_write: IIUNK18 = 0x%08x\n", (uint32_t) val);
+        trace_s5l8702_i2c_write("IIUNK18", (uint32_t) val);
         s->iicunk18 = (uint32_t) val;
         break;
     case S5L8702_I2C_IICSTAT2:
-        I2C_LOG("s5l8702_i2c_write: IICSTAT2 = 0x%08x\n", (uint32_t) val);
+        trace_s5l8702_i2c_write("IICSTAT2", (uint32_t) val);
         s->iicstat2 &= ~(uint8_t) val;
         break;
     default:

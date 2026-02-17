@@ -45,3 +45,7 @@ npcm7xx_smbus_recv_fifo(const char *id, uint8_t received, uint8_t expected) "%s 
 
 pca954x_write_bytes(uint8_t value) "PCA954X write data: 0x%02x"
 pca954x_read_data(uint8_t value) "PCA954X read data: 0x%02x"
+
+# s5l8702-i2c.c
+s5l8702_i2c_read(const char *reg_name, uint64_t value) "read %s: -> 0x%" PRIx64
+s5l8702_i2c_write(const char *reg_name, uint64_t value) "write %s: <- 0x%" PRIx64

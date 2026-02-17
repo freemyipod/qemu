@@ -3,6 +3,7 @@
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "hw/misc/pcf5063x.h"
+#include "trace.h"
 
 #define PCF5063X_VERSION    0x00
 #define PCF5063X_VARIANT    0x01
@@ -126,6 +127,7 @@ static uint8_t pcf5063x_read(Pcf5063xState *s, uint8_t addr)
     switch (addr) {
     case PCF5063X_ADCS1:
         r = 0xFF;
+        break;
     case PCF5063X_ADCS3:
         r = 0xFF;
         break;
@@ -134,6 +136,7 @@ static uint8_t pcf5063x_read(Pcf5063xState *s, uint8_t addr)
         break;
     case PCF5063X_MBCS1:
         r = 0xFF;
+        break;
     // The following registers are read at the startup, INTX are just to clear them
     case PCF5063X_GPIO3CFG:
     case PCF5063X_OOCSHDWN:
@@ -143,24 +146,25 @@ static uint8_t pcf5063x_read(Pcf5063xState *s, uint8_t addr)
     case PCF5063X_INT4:
     case PCF5063X_INT5:
     case PCF50635_INT6:
+        break;
     default:
-        printf("pcf5063x_read: unknown addr %02x\n", addr);
-        r = s->regs[addr];
+        trace_pcf5063x_unknown_read(addr);
         break;
     }
 
-    printf("pcf5063x_read: reading addr %02x: %02x\n", addr, r);
+    r = s->regs[addr];
+    trace_pcf5063x_read(addr, r);
 
     return r;
 }
 
 static void pcf5063x_write(Pcf5063xState *s, uint8_t addr, uint8_t data)
 {
-    printf("pcf5063x_write: writing addr %02x: %02x\n", addr, data);
+    trace_pcf5063x_write(addr, data);
 
     switch (addr) {
     default:
-        printf("pcf5063x_write: unknown addr %02x\n", addr);
+        trace_pcf5063x_unknown_write(addr);
         s->regs[addr] = data;
         break;
     }

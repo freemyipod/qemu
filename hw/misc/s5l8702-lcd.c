@@ -6,6 +6,7 @@
 #include "ui/pixel_ops.h"
 #include "ui/console.h"
 #include "hw/display/framebuffer.h"
+#include "trace.h"
 
 #define LCD_CONFIG (0x000)
 #define LCD_WCMD   (0x004)
@@ -67,15 +68,15 @@ static void s5l8702_lcd_write(void *opaque, hwaddr offset,
 
     switch (offset) {
         case LCD_CONFIG:
-            printf("%s: CONFIG = 0x%08x\n", __func__, val);
+            trace_s5l8702_lcd_write("CONFIG", val);
             s->lcd_config = val;
             break;
         case LCD_WCMD:
-            printf("%s: WCMD = 0x%08x\n", __func__, val);
+            trace_s5l8702_lcd_write("WCMD", val);
             s->lcd_wcmd = val;
             switch (s->lcd_wcmd) {
                 case 0x04: // Read display identification information (04h)
-                    printf("%s: read display identification information\n", __func__);
+                    trace_s5l8702_lcd_action("read display identification information", val);
                     fifo8_reset(s->dbuff_buf);
                     fifo8_push(s->dbuff_buf, 0x00);
                     fifo8_push(s->dbuff_buf, 0x38);
@@ -83,28 +84,28 @@ static void s5l8702_lcd_write(void *opaque, hwaddr offset,
                     fifo8_push(s->dbuff_buf, 0x71);
                     break;
                 case 0x10: // Enter Sleep Mode (10h)
-                    printf("%s: enter sleep mode\n", __func__);
+                    trace_s5l8702_lcd_action("enter sleep mode", val);
                     break;
                 case 0x11: // Sleep Out (11h)
-                    printf("%s: sleep out\n", __func__);
+                    trace_s5l8702_lcd_action("sleep out", val);
                     break;
                 case 0x13: // Normal Display Mode ON (13h)
-                    printf("%s: normal display mode on\n", __func__);
+                    trace_s5l8702_lcd_action("normal display mode on", val);
                     break;
                 case 0x2a: // Column Address Set (2Ah)
                     break;
                 case 0x2b: // Page Address Set (2Bh)
                     break;
                 case 0x2c: // Memory Write (2Ch)
-                    printf("%s: memory write\n", __func__);
+                    trace_s5l8702_lcd_action("memory write", val);
                     s->memcnt = 0;
                     s->address_latches = 0;
                     break;
                 case 0x28: // Display OFF (28h)
-                    printf("%s: display off\n", __func__);
+                    trace_s5l8702_lcd_action("display off", val);
                     break;
                 case 0x29: // Display ON (29h)
-                    printf("%s: display on\n", __func__);
+                    trace_s5l8702_lcd_action("display on", val);
                     break;
                 case 0x3A: // COLMOD: Pixel Format Set (3Ah)
                     break;
@@ -113,16 +114,16 @@ static void s5l8702_lcd_write(void *opaque, hwaddr offset,
                 case 0x36: // Memory Access Control (36h)
                     break;
                 default:
-                    printf("%s: unimplemented lcd command (0x%08x)\n", __func__, s->lcd_wcmd);
+                    trace_s5l8702_lcd_action("unimplemented lcd command", val);
                     break;
             }
             break;
         case LCD_RCMD:
-            printf("%s: RCMD = 0x%08x\n", __func__, val);
+            trace_s5l8702_lcd_write("RCMD", val);
             s->lcd_rcmd = val;
             break;
         case LCD_RDATA:
-            printf("%s: RDATA = 0x%08x\n", __func__, val);
+            trace_s5l8702_lcd_write("RDATA", val);
             s->lcd_rdata = val;
             if (val == 0) {
                 if (fifo8_is_empty(s->dbuff_buf)) s->lcd_dbuff = 0;
@@ -130,43 +131,43 @@ static void s5l8702_lcd_write(void *opaque, hwaddr offset,
             }
             break;
         case LCD_DBUFF:
-            printf("%s: DBUFF = 0x%08x\n", __func__, val);
+            trace_s5l8702_lcd_write("DBUFF", val);
             s->lcd_dbuff = val;
             break;
         case LCD_INTCON:
-            printf("%s: INTCON = 0x%08x\n", __func__, val);
+            trace_s5l8702_lcd_write("INTCON", val);
             s->lcd_intcon = val;
             break;
         case LCD_STATUS:
-            printf("%s: STATUS = 0x%08x\n", __func__, val);
+            trace_s5l8702_lcd_write("STATUS", val);
             s->lcd_status = val;
             break;
         case LCD_PHTIME:
-            printf("%s: PHTIME = 0x%08x\n", __func__, val);
+            trace_s5l8702_lcd_write("PHTIME", val);
             s->lcd_phtime = val;
             break;
         case LCD_WDATA:
-            if (s->lcd_wcmd != 0x2c) printf("%s: WDATA = 0x%08x\n", __func__, val);
+            if (s->lcd_wcmd != 0x2c) trace_s5l8702_lcd_write("WDATA", val);
             s->lcd_wdata = val;
             switch (s->lcd_wcmd) {
                 case 0x2A: // Column Address Set (2Ah)
-                    printf("%s: write to column address set 0x%08x.\n", __func__, val);
+                    trace_s5l8702_lcd_action("write to column address set", val);
                     if (s->address_latches < 2) s->sc = (s->sc << 8) | val;
                     else s->ec = (s->ec << 8) | val;
                     s->address_latches++;
                     if (s->address_latches == 4) {
                         s->address_latches = 0;
-                        printf("LCD GOT 0x2A: sc=%04x ec=%04x\n", s->sc, s->ec);
+                        trace_s5l8702_lcd_action("LCD GOT 0x2A", val);
                     }
                     break;
                 case 0x2B: // Page Address Set (2Bh)
-                    printf("%s: write to page address set 0x%08x.\n", __func__, val);
+                    trace_s5l8702_lcd_action("write to page address set", val);
                     if (s->address_latches < 2) s->sp = (s->sp << 8) | val;
                     else s->ep = (s->ep << 8) | val;
                     s->address_latches++;
                     if (s->address_latches == 4) {
                         s->address_latches = 0;
-                        printf("LCD GOT 0x2B: sp=%04x ep=%04x\n", s->sp, s->ep);
+                        trace_s5l8702_lcd_action("LCD GOT 0x2B", val);
                     }
                     break;
                 case 0x2C: // Memory Write (2Ch)
@@ -190,16 +191,16 @@ static void s5l8702_lcd_write(void *opaque, hwaddr offset,
                     s->memcnt++;
                     break;
                 case 0x3A: // COLMOD: Pixel Format Set (3Ah)
-                    printf("%s: pixel format set 0x%08x.\n", __func__, val);
+                    trace_s5l8702_lcd_action("pixel format set", val);
                     break;
                 case 0x35: // Tearing Effect Line ON (35h)
-                    printf("%s: tearing effect line on\n", __func__);
+                    trace_s5l8702_lcd_action("tearing effect line on", val);
                     break;
                 case 0x36: // Memory Access Control (36h)
-                    printf("%s: memory access control 0x%08x.\n", __func__, val);
+                    trace_s5l8702_lcd_action("memory access control", val);
                     break;
                 default:
-                    printf("%s: unimplemented lcd command (0x%08x)\n", __func__, s->lcd_wcmd);
+                    trace_s5l8702_lcd_action("unimplemented lcd command", s->lcd_wcmd);
                     s->lcd_regs[s->lcd_wcmd] = s->lcd_regs[s->lcd_wcmd] << 8 | (val & 0xFF);
                     // fprintf(stderr, "LCD Register 0x%02x = 0x%016llx\n", s->lcd_wcmd, s->lcd_regs[s->lcd_wcmd]);
                     break;
@@ -221,7 +222,7 @@ static const MemoryRegionOps s5l8702_lcd_ops = {
 static void s5l8702_lcd_reset(DeviceState *dev) {
     S5L8702LcdState *s = S5L8702_LCD(dev);
 
-    printf("s5l8702_lcd_reset\n");
+    trace_s5l8702_lcd_reset();
 
     /* Reset registers */
     s->config = 0;
@@ -372,7 +373,7 @@ static const GraphicHwOps vgafb_ops = {
 static void s5l8702_lcd_init(Object *obj) {
     S5L8702LcdState *s = S5L8702_LCD(obj);
 
-    printf("s5l8702_lcd_init\n");
+    trace_s5l8702_lcd_init();
 
     /* Memory mapping */
     memory_region_init_io(&s->iomem, OBJECT(s), &s5l8702_lcd_ops, s, TYPE_S5L8702_LCD, S5L8702_LCD_SIZE);

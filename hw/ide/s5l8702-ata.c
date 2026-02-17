@@ -3,6 +3,7 @@
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "hw/ide/s5l8702-ata.h"
+#include "trace.h"
 
 #define ATA_DMA_ADDR 0x38700088
 
@@ -489,7 +490,7 @@ static void s5l8702_ata_reset(DeviceState *dev)
 {
     S5L8702AtaState *s = S5L8702_ATA(dev);
 
-    printf("s5l8702_ata_reset\n");
+    trace_s5l8702_ata_reset();
 
     /* Reset registers */
     s->ata_control = (1 << 1); // clk_down_ready
@@ -527,7 +528,7 @@ static void s5l8702_ata_reset(DeviceState *dev)
 
 void s5l8702_ata_set_drive_info(S5L8702AtaState *s, DriveInfo *i)
 {
-    printf("s5l8702_ata_set_drive_info: %p\n", i);
+    trace_s5l8702_ata_set_drive_info(i);
     ide_bus_create_drive(&s->bus, 0, i);
 }
 
@@ -536,7 +537,7 @@ static void s5l8702_ata_init(Object *obj)
     SysBusDevice *d = SYS_BUS_DEVICE(obj);
     S5L8702AtaState *s = S5L8702_ATA(obj);
 
-    printf("s5l8702_ata_init\n");
+    trace_s5l8702_ata_init();
 
     /* Memory mapping */
     memory_region_init_io(&s->iomem, OBJECT(s), &s5l8702_ata_ops, s, TYPE_S5L8702_ATA, S5L8702_ATA_SIZE);
@@ -557,7 +558,7 @@ static void s5l8702_ata_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
-    printf("s5l8702_ata_class_init\n");
+    trace_s5l8702_ata_class_init();
 
     dc->realize = s5l8702_ata_realize;
     dc->reset = s5l8702_ata_reset;

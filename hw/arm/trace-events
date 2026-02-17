@@ -53,3 +53,14 @@ smmuv3_notify_flag_add(const char *iommu) "ADD SMMUNotifier node for iommu mr=%s
 smmuv3_notify_flag_del(const char *iommu) "DEL SMMUNotifier node for iommu mr=%s"
 smmuv3_inv_notifiers_iova(const char *name, uint16_t asid, uint64_t iova, uint8_t tg, uint64_t num_pages) "iommu mr=%s asid=%d iova=0x%"PRIx64" tg=%d num_pages=0x%"PRIx64
 
+# ipod-classic.c
+ipod_classic_init(void)
+ipod_classic_machine_init(void)
+ipod_classic_bootrom_read(const char *path) "read successfully from %s"
+ipod_classic_bootrom_copied(size_t size) "copied to memory, size=%zu"
+ipod_classic_nor_loaded(void) "NOR image loaded"
+
+# s5l8702.c
+s5l8702_init(void)
+s5l8702_realize(void)
+s5l8702_class_init(void)

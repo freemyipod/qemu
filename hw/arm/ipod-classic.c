@@ -9,6 +9,7 @@
 #include "qom/object.h"
 #include "hw/arm/ipod-classic.h"
 #include "hw/qdev-properties.h"
+#include "trace.h"
 
 static char *ipod_classic_get_bootrom_path(Object *obj, Error **errp)
 {
@@ -28,10 +29,11 @@ static void ipod_classic_init(Object *obj)
     MachineState *machine = MACHINE(obj);
     IpodClassicState *s = IPOD_CLASSIC_MACHINE(obj);
 
-    printf("ipod_classic_init\n");
+    trace_ipod_classic_init();
 
     if (!object_property_add_str(obj, "bootrom", ipod_classic_get_bootrom_path, ipod_classic_set_bootrom_path)) {
-        printf("ipod_classic_init: failed to add bootrom property\n");
+        error_report("ipod_classic_init: failed to add bootrom property\n");
+        exit(1);
     }
 }
 
@@ -39,7 +41,7 @@ static void ipod_classic_machine_init(MachineState *machine)
 {
     IpodClassicState *s = IPOD_CLASSIC_MACHINE(machine);
 
-    printf("ipod_classic_machine_init\n");
+    trace_ipod_classic_machine_init();
 
     /* BIOS is not supported by this board */
     if (machine->firmware) {
@@ -85,11 +87,11 @@ static void ipod_classic_machine_init(MachineState *machine)
     DeviceState *flash_dev = qdev_new("sst25vf080b"); // According to https://freemyipod.org/wiki/Classic_3G
     DriveInfo *flash_info = drive_get_by_index(IF_MTD, 0);
     if (!flash_info) {
-        printf("NOR image not found\n");
+        error_report("NOR image not found");
         exit(1);
     }
 
-    printf("Loaded NOR image\n");
+    trace_ipod_classic_nor_loaded();
     qdev_prop_set_drive(flash_dev, "drive", blk_by_legacy_dinfo(flash_info));
     qdev_realize_and_unref(flash_dev, BUS(s->soc.spi[0].spi), &error_fatal);
 
@@ -97,13 +99,14 @@ static void ipod_classic_machine_init(MachineState *machine)
     qdev_connect_gpio_out(DEVICE(&s->soc.gpio), 0, flash_cs);
 
     /* Connect an IDE HDD to s5l8702-ata */
-    DriveInfo *hdd_info = drive_get_by_index(IF_IDE, 0);
-    if (!hdd_info) {
-        printf("HDD image not found\n");
-        exit(1);
-    }
-    printf("Setting drive to ata peripheral\n");
-    s5l8702_ata_set_drive_info(&s->soc.ata, hdd_info);
+    // TODO: Currently commented out because the nano doesn't have an HDD
+    // DriveInfo *hdd_info = drive_get_by_index(IF_IDE, 0);
+    // if (!hdd_info) {
+    //     printf("HDD image not found\n");
+    //     exit(1);
+    // }
+    // printf("Setting drive to ata peripheral\n");
+    // s5l8702_ata_set_drive_info(&s->soc.ata, hdd_info);
     
     /* PCF5063x */
     // object_initialize_child(OBJECT(s), "pcf5063x", &s->pcf5063x, TYPE_PCF5063X);
@@ -113,12 +116,12 @@ static void ipod_classic_machine_init(MachineState *machine)
     uint8_t *bootrom = NULL;
     size_t bootrom_size = 0;
     if (g_file_get_contents(s->bootrom_path, (char **) &bootrom, &bootrom_size, NULL)) {
-        printf("ipod_classic_machine_init: bootrom read successfully\n");
+        trace_ipod_classic_bootrom_read(s->bootrom_path);
         AddressSpace *nsas = cpu_get_address_space(CPU(&s->soc.cpu), ARMASIdx_NS);
         address_space_write(nsas, 0x20000000, MEMTXATTRS_UNSPECIFIED, bootrom, bootrom_size);
-        printf("ipod_classic_machine_init: bootrom copied to memory\n");
+        trace_ipod_classic_bootrom_copied(bootrom_size);
     } else {
-        printf("ipod_classic_machine_init: failed to read bootrom\n");
+        error_report("Failed to read bootrom from %s", s->bootrom_path);
         exit(1);
     }
 }

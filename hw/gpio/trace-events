@@ -31,3 +31,9 @@ sifive_gpio_update_output_irq(int64_t line, int64_t value) "line %" PRIi64 " val
 # aspeed_gpio.c
 aspeed_gpio_read(uint64_t offset, uint64_t value) "offset: 0x%" PRIx64 " value 0x%" PRIx64
 aspeed_gpio_write(uint64_t offset, uint64_t value) "offset: 0x%" PRIx64 " value 0x%" PRIx64
+
+# s5l8702-gpio.c
+s5l8702_gpio_write(const char *reg, int port, uint32_t val) "%s%d = 0x%08x"
+s5l8702_gpio_write_cmd(uint8_t oldval, uint8_t newval) "old: 0x%02x, new: 0x%02x"
+s5l8702_gpio_read(const char *reg, int port, uint32_t val) "%s%d = 0x%08x"
+s5l8702_gpio_read_cmd(uint8_t val) "0x%02x"

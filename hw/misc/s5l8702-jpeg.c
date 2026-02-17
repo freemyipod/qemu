@@ -3,6 +3,7 @@
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "hw/misc/s5l8702-jpeg.h"
+#include "trace.h"
 #include <math.h>
 
 #define JPEG_UNK1   0x60000
@@ -299,7 +300,7 @@ static const MemoryRegionOps s5l8702_jpeg_ops = {
 static void s5l8702_jpeg_reset(DeviceState *dev) {
     S5L8702JpegState *s = S5L8702_JPEG(dev);
 
-    printf("s5l8702_jpeg_reset\n");
+    trace_s5l8702_jpeg_reset();
 
     // precompute the IDCT lookup table
     for (int y = 0; y < 8; y++) {
@@ -322,7 +323,7 @@ static void s5l8702_jpeg_reset(DeviceState *dev) {
 static void s5l8702_jpeg_init(Object *obj) {
     S5L8702JpegState *s = S5L8702_JPEG(obj);
 
-    printf("s5l8702_jpeg_init\n");
+    trace_s5l8702_jpeg_init();
 
     /* Memory mapping */
     memory_region_init_io(&s->iomem, OBJECT(s), &s5l8702_jpeg_ops, s, TYPE_S5L8702_JPEG, S5L8702_JPEG_SIZE);

@@ -7,6 +7,7 @@
 #include "hw/qdev-core.h"
 #include "hw/arm/s5l8702.h"
 #include "hw/misc/unimp.h"
+#include "trace.h"
 
 #define S5L8702_LCD_BASE    0x38300000
 #define S5L8702_JPEG_BASE   0x39600000
@@ -28,7 +29,7 @@ static void s5l8702_init(Object *obj)
 {
     S5L8702State *s = S5L8702(obj);
 
-    printf("s5l8702_init\n");
+    trace_s5l8702_init();
 
     object_initialize_child(obj, "cpu", &(s->cpu), ARM_CPU_TYPE_NAME("arm926"));
 
@@ -81,7 +82,7 @@ static void s5l8702_realize(DeviceState *dev, Error **errp)
     S5L8702State *s = S5L8702(dev);
     MemoryRegion *system_memory = get_system_memory();
 
-    printf("s5l8702_realize\n");
+    trace_s5l8702_realize();
 
     qdev_realize(DEVICE(&s->cpu), NULL, &error_fatal);
 
@@ -186,7 +187,7 @@ static void s5l8702_class_init(ObjectClass *oc, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
 
-    printf("s5l8702_class_init\n");
+    trace_s5l8702_class_init();
 
     dc->realize = s5l8702_realize;
 }

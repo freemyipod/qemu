@@ -4,6 +4,7 @@
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "hw/gpio/s5l8702-gpio.h"
+#include "trace.h"
 
 #define S5L8702_GPIO_PCON(port)  (0x00000000 + (port << 5))
 #define S5L8702_GPIO_PDAT(port)  (0x00000004 + (port << 5))
@@ -37,7 +38,7 @@ static uint64_t s5l8702_gpio_read(void *opaque, hwaddr offset,
     case S5L8702_GPIO_PCON(14):
     case S5L8702_GPIO_PCON(15):
         r = s->pcon[port];
-        printf("s5l8702_gpio_read: S5L8702_GPIO_PCON%d = 0x%08x\n", port, r);
+        trace_s5l8702_gpio_read("S5L8702_GPIO_PCON", port, r);
         break;
     case S5L8702_GPIO_PDAT(0):
     case S5L8702_GPIO_PDAT(1):
@@ -56,7 +57,7 @@ static uint64_t s5l8702_gpio_read(void *opaque, hwaddr offset,
     case S5L8702_GPIO_PDAT(14):
     case S5L8702_GPIO_PDAT(15):
         r = s->pdat[port];
-        printf("s5l8702_gpio_read: S5L8702_GPIO_PDAT%d = 0x%08x\n", port, r);
+        trace_s5l8702_gpio_read("S5L8702_GPIO_PDAT", port, r);
         if (port == 6) {
             r = 0x00;
         }
@@ -78,7 +79,7 @@ static uint64_t s5l8702_gpio_read(void *opaque, hwaddr offset,
     case S5L8702_GPIO_PUNA(14):
     case S5L8702_GPIO_PUNA(15):
         r = s->puna[port];
-        printf("s5l8702_gpio_read: S5L8702_GPIO_PUNA%d = 0x%08x\n", port, r);
+        trace_s5l8702_gpio_read("S5L8702_GPIO_PUNA", port, r);
         break;
     case S5L8702_GPIO_PUNB(0):
     case S5L8702_GPIO_PUNB(1):
@@ -97,7 +98,7 @@ static uint64_t s5l8702_gpio_read(void *opaque, hwaddr offset,
     case S5L8702_GPIO_PUNB(14):
     case S5L8702_GPIO_PUNB(15):
         r = s->punb[port];
-        printf("s5l8702_gpio_read: S5L8702_GPIO_PUNB%d = 0x%08x\n", port, r);
+        trace_s5l8702_gpio_read("S5L8702_GPIO_PUNB", port, r);
         break;
     case S5L8702_GPIO_PUNC(0):
     case S5L8702_GPIO_PUNC(1):
@@ -116,11 +117,11 @@ static uint64_t s5l8702_gpio_read(void *opaque, hwaddr offset,
     case S5L8702_GPIO_PUNC(14):
     case S5L8702_GPIO_PUNC(15):
         r = s->punc[port];
-        printf("s5l8702_gpio_read: S5L8702_GPIO_PUNC%d = 0x%08x\n", port, r);
+        trace_s5l8702_gpio_read("S5L8702_GPIO_PUNA", port, r);
         break;
     case S5L8702_GPIO_GPIOCMD:
         r = s->gpiocmd;
-        printf("s5l8702_gpio_read: S5L8702_GPIO_GPIOCMD = 0x%08x\n", r);
+        trace_s5l8702_gpio_read_cmd(r);
         break;
     default:
         qemu_log_mask(LOG_UNIMP, "%s: unimplemented read (offset 0x%04x)\n",
@@ -153,7 +154,7 @@ static void s5l8702_gpio_write(void *opaque, hwaddr offset,
     case S5L8702_GPIO_PCON(13):
     case S5L8702_GPIO_PCON(14):
     case S5L8702_GPIO_PCON(15):
-        printf("s5l8702_gpio_write: S5L8702_GPIO_PCON%d = 0x%08x\n", port, (uint32_t) val);
+        trace_s5l8702_gpio_write("S5L8702_GPIO_PCON", port, (uint32_t) val);
         s->pcon[port] = (uint8_t) val;
         break;
     case S5L8702_GPIO_PDAT(0):
@@ -172,7 +173,7 @@ static void s5l8702_gpio_write(void *opaque, hwaddr offset,
     case S5L8702_GPIO_PDAT(13):
     case S5L8702_GPIO_PDAT(14):
     case S5L8702_GPIO_PDAT(15):
-        printf("s5l8702_gpio_write: S5L8702_GPIO_PDAT%d = 0x%08x\n", port, (uint32_t) val);
+        trace_s5l8702_gpio_write("S5L8702_GPIO_PDAT", port, (uint32_t) val);
         s->pdat[port] = (uint8_t) val;
         for (int i = 0; i < 8; i++) {
             qemu_set_irq(s->output[port * 8 + i], (s->pdat[port] >> i) & 1);
@@ -194,7 +195,7 @@ static void s5l8702_gpio_write(void *opaque, hwaddr offset,
     case S5L8702_GPIO_PUNA(13):
     case S5L8702_GPIO_PUNA(14):
     case S5L8702_GPIO_PUNA(15):
-        printf("s5l8702_gpio_write: S5L8702_GPIO_PUNA%d = 0x%08x\n", port, (uint32_t) val);
+        trace_s5l8702_gpio_write("S5L8702_GPIO_PUNA", port, (uint32_t) val);
         s->puna[port] = (uint8_t) val;
         break;
     case S5L8702_GPIO_PUNB(0):
@@ -213,7 +214,7 @@ static void s5l8702_gpio_write(void *opaque, hwaddr offset,
     case S5L8702_GPIO_PUNB(13):
     case S5L8702_GPIO_PUNB(14):
     case S5L8702_GPIO_PUNB(15):
-        printf("s5l8702_gpio_write: S5L8702_GPIO_PUNB%d = 0x%08x\n", port, (uint32_t) val);
+        trace_s5l8702_gpio_write("S5L8702_GPIO_PUNB", port, (uint32_t) val);
         s->punb[port] = (uint8_t) val;
         break;
     case S5L8702_GPIO_PUNC(0):
@@ -232,11 +233,11 @@ static void s5l8702_gpio_write(void *opaque, hwaddr offset,
     case S5L8702_GPIO_PUNC(13):
     case S5L8702_GPIO_PUNC(14):
     case S5L8702_GPIO_PUNC(15):
-        printf("s5l8702_gpio_write: S5L8702_GPIO_PUNC%d = 0x%08x\n", port, (uint32_t) val);
+        trace_s5l8702_gpio_write("S5L8702_GPIO_PUNC", port, (uint32_t) val);
         s->punc[port] = (uint8_t) val;
         break;
     case S5L8702_GPIO_GPIOCMD:
-        printf("s5l8702_gpio_write: S5L8702_GPIO_GPIOCMD: old: 0x%08x, new: 0x%08x\n", s->gpiocmd, (uint8_t) val);
+        trace_s5l8702_gpio_write_cmd(s->gpiocmd, (uint8_t) val);
         s->gpiocmd = (uint8_t) val;
         if ((s->gpiocmd & ~1) == 0x0000e) {
             qemu_set_irq(s->output[0], s->gpiocmd & 1);

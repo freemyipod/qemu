@@ -4,6 +4,7 @@
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "hw/misc/s5l8702-aes.h"
+#include "trace.h"
 
 #define REG_INDEX(offset) (offset / sizeof(uint32_t))
 
@@ -26,10 +27,10 @@ static void s5l8702_aes_write(void *opaque, hwaddr offset,
                               uint64_t value, unsigned size) {
     S5L8702AesState *s = S5L8702_AES(opaque);
 
-    fprintf(stderr, "%s: offset 0x%08x value 0x%08x\n", __FUNCTION__, offset, value);
+    trace_s5l8702_aes_write((uint32_t)offset, (uint32_t)value);
 
     switch (offset) {
-        case AES_GO:
+        case AES_GO: {
             uint8_t *inbuf;
             uint8_t *buf;
 
@@ -38,10 +39,10 @@ static void s5l8702_aes_write(void *opaque, hwaddr offset,
 
             switch (s->keytype) {
                 case AESGID:
-                    fprintf(stderr, "%s: No support for GID key\n", __func__);
+                    trace_s5l8702_aes_no_support("GID");
                     break;
                 case AESUID:
-                    fprintf(stderr, "%s: No support for UID key\n", __func__);
+                    trace_s5l8702_aes_no_support("UID");
                     // AES_set_decrypt_key(key_uid, sizeof(key_uid) * 8, &s->decryptKey);
                     break;
                 case AESCustom:
@@ -58,18 +59,9 @@ static void s5l8702_aes_write(void *opaque, hwaddr offset,
                 AES_cbc_encrypt(inbuf, buf, s->insize, &s->decryptKey, (uint8_t *) s->ivec, !isDecrypt);
             else memcpy(buf, inbuf, s->insize);
 
-            printf("AES: %s %d bytes from 0x%08x to 0x%08x\n", isDecrypt ? "decrypted" : "encrypted", s->insize,
-                   s->inaddr, s->outaddr);
+            trace_s5l8702_aes_operation(isDecrypt ? "decrypted" : "encrypted", s->insize, s->inaddr, s->outaddr);
 
-//            printf("Decrypted: ");
-//            for (uint32_t i = 0; i < s->insize; i += 4) {
-//                printf("%02x", buf[i]);
-//                printf("%02x", buf[i + 1]);
-//                printf("%02x", buf[i + 2]);
-//                printf("%02x ", buf[i + 3]);
-//            }
-//            printf("\n");
-
+            // ...existing code...
             cpu_physical_memory_write((s->outaddr), buf, s->insize);
             memset(s->custkey, 0, 0x20);
             memset(s->ivec, 0, 0x10);
@@ -78,6 +70,7 @@ static void s5l8702_aes_write(void *opaque, hwaddr offset,
             s->outsize = s->insize;
             s->status = 0xf;
             break;
+        }
         case AES_KEYLEN:
             s->keylen = value;
             break;
@@ -107,7 +100,8 @@ static void s5l8702_aes_write(void *opaque, hwaddr offset,
             break;
         }
         default:
-            fprintf(stderr, "%s: UNMAPPED AES_ADDR @ offset 0x%08x - 0x%08x\n", __FUNCTION__, offset, value);
+            // fprintf(stderr, "%s: UNMAPPED AES_ADDR @ offset 0x%08x - 0x%08x\n", __FUNCTION__, offset, value);
+            trace_s5l8702_aes_write((uint32_t)offset, (uint32_t)value);
             break;
     }
 }
@@ -121,7 +115,7 @@ static const MemoryRegionOps s5l8702_aes_ops = {
 static void s5l8702_aes_reset(DeviceState *dev) {
     S5L8702AesState *s = S5L8702_AES(dev);
 
-    printf("s5l8702_aes_reset\n");
+    trace_s5l8702_aes_reset();
 
     /* Reset registers */
     // memset(s->regs, 0, sizeof(s->regs));
@@ -133,7 +127,7 @@ static void s5l8702_aes_reset(DeviceState *dev) {
 static void s5l8702_aes_init(Object *obj) {
     S5L8702AesState *s = S5L8702_AES(obj);
 
-    printf("s5l8702_aes_init\n");
+    trace_s5l8702_aes_init();
 
     /* Memory mapping */
     memory_region_init_io(&s->iomem, OBJECT(s), &s5l8702_aes_ops, s, TYPE_S5L8702_AES, S5L8702_AES_SIZE);

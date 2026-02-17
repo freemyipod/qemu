@@ -4,6 +4,7 @@
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "hw/misc/s5l8702-clk.h"
+#include "trace.h"
 
 /* CLK register offsets */
 enum {
@@ -116,7 +117,7 @@ static void s5l8702_clk_reset(DeviceState *dev)
 {
     S5L8702ClkState *s = S5L8702_CLK(dev);
 
-    printf("s5l8702_clk_reset\n");
+    trace_s5l8702_clk_reset();
 
     /* Reset registers */
     memset(s->regs, 0, sizeof(s->regs));
@@ -156,7 +157,7 @@ static void s5l8702_clk_init(Object *obj)
 {
     S5L8702ClkState *s = S5L8702_CLK(obj);
 
-    printf("s5l8702_clk_init\n");
+    trace_s5l8702_clk_init();
 
     /* Memory mapping */
     memory_region_init_io(&s->iomem, OBJECT(s), &s5l8702_clk_ops, s, TYPE_S5L8702_CLK, S5L8702_CLK_SIZE);
