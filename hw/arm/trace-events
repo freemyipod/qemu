@@ -60,6 +60,13 @@ ipod_classic_bootrom_read(const char *path) "read successfully from %s"
 ipod_classic_bootrom_copied(size_t size) "copied to memory, size=%zu"
 ipod_classic_nor_loaded(void) "NOR image loaded"
 
+# ipod-nano3g.c
+ipod_nano3g_init(void)
+ipod_nano3g_machine_init(void)
+ipod_nano3g_bootrom_read(const char *path) "read successfully from %s"
+ipod_nano3g_bootrom_copied(size_t size) "copied to memory, size=%zu"
+ipod_nano3g_nor_loaded(void) "NOR image loaded"
+
 # s5l8702.c
 s5l8702_init(void)
 s5l8702_realize(void)
