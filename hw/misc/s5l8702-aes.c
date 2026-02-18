@@ -3,6 +3,7 @@
 #include "hw/sysbus.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
+#include "crypto/aes.h"
 #include "hw/misc/s5l8702-aes.h"
 #include "trace.h"
 
@@ -55,8 +56,11 @@ static void s5l8702_aes_write(void *opaque, hwaddr offset,
             bool isDecrypt = s->keylen == 14;
 
             // ignore the GID key because it's assumed anything encrypted with this key has been decrypted prior to emulation
-            if (s->keytype != 0x01)
-                AES_cbc_encrypt(inbuf, buf, s->insize, &s->decryptKey, (uint8_t *) s->ivec, !isDecrypt);
+            if (s->keytype != 0x01) {
+                if(isDecrypt) {
+                    AES_decrypt(inbuf, inbuf, &s->decryptKey);
+                }
+            }
             else memcpy(buf, inbuf, s->insize);
 
             trace_s5l8702_aes_operation(isDecrypt ? "decrypted" : "encrypted", s->insize, s->inaddr, s->outaddr);

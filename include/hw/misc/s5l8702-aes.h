@@ -3,7 +3,7 @@
 
 #include "qom/object.h"
 #include "hw/sysbus.h"
-#include <openssl/aes.h>
+#include "crypto/aes.h"
 
 #define TYPE_S5L8702_AES    "s5l8702-aes"
 OBJECT_DECLARE_SIMPLE_TYPE(S5L8702AesState, S5L8702_AES)

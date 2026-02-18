@@ -4,6 +4,7 @@
 #include "qemu/module.h"
 #include "hw/misc/s5l8702-sha.h"
 #include "trace.h"
+#include "crypto/hash.h"
 
 #define SHA1CONFIG  0x0000
 #define SHA1RESET   0x0004
@@ -36,11 +37,9 @@ static uint64_t s5l8702_sha_read(void *opaque, hwaddr offset, unsigned size) {
             if (!s->hash_computed) {
                 // lazy compute the final hash by inspecting the last eight bytes of the buffer, which contains the length of the input data.
                 uint64_t data_length = swapLong(((uint64_t *) s->buffer)[s->buffer_len / 8 - 1]) / 8;
-
-                SHA_CTX ctx;
-                SHA1_Init(&ctx);
-                SHA1_Update(&ctx, s->buffer, data_length);
-                SHA1_Final(s->outbuf, &ctx);
+                size_t hash_len;
+                Error** errp;
+                qcrypto_hash_bytes(QCRYPTO_HASH_ALG_SHA1, s->buffer, data_length, s->outbuf, &hash_len, errp);
                 s->hash_computed = true;
             }
 
