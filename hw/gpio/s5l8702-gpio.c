@@ -3,6 +3,7 @@
 #include "hw/sysbus.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
+#include "qemu/timer.h"
 #include "hw/gpio/s5l8702-gpio.h"
 #include "trace.h"
 
@@ -13,10 +14,8 @@
 #define S5L8702_GPIO_PUNC(port)  (0x00000010 + (port << 5))
 #define S5L8702_GPIO_GPIOCMD     0x00000200
 
-static uint64_t s5l8702_gpio_read(void *opaque, hwaddr offset,
-                                      unsigned size)
-{
-    const S5L8702GpioState *s = S5L8702_GPIO(opaque);
+static uint64_t s5l8702_gpio_read(void *opaque, hwaddr offset, unsigned size) {
+    S5L8702GpioState *s = S5L8702_GPIO(opaque);
     const uint32_t port = offset >> 5;
     uint8_t r = 0;
 
@@ -55,6 +54,62 @@ static uint64_t s5l8702_gpio_read(void *opaque, hwaddr offset,
     case S5L8702_GPIO_PDAT(12):
     case S5L8702_GPIO_PDAT(13):
     case S5L8702_GPIO_PDAT(14):
+        // this is the clickwheel code. brace yourself.
+        // GPIOe.2 indicates who is talking: high = clickwheel, low = iPod
+        // GPIOe.3 is the clock, likely driven by the clickwheel, data latch on rising edge
+        // GPIOe.4 TX to clickwheel
+        // GPIOe.5 RX from clickwheel
+
+        r = 0x00;
+        uint64_t ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+
+        if(s->clickwheel_clk) {
+            s->clickwheel_clk = 0;
+            if(s->gpio_pin_state[0xe][2] & 0x01) {
+                s->clickwheel_bit_to_send = s->clickwheel_tx_buf & 1;
+                s->clickwheel_tx_buf >>= 1;
+                r |= s->clickwheel_bit_to_send << 5;
+                s->clickwheel_skip_cycle = 1;
+                trace_clickwheel_sending(s->clickwheel_bit_to_send, s->clickwheel_tx_buf, ns);
+            }
+        } else {
+            if(s->clickwheel_skip_cycle) {
+                s->clickwheel_skip_cycle = 0;
+                trace_clickwheel_skip_cycle();
+            } else {
+                s->clickwheel_clk = 1;
+                r |= 0b00001000;
+            }
+
+            if(s->gpio_pin_state[0xe][2] & 0x01) {
+                r |= s->clickwheel_bit_to_send << 5;
+                trace_clickwheel_sending(s->clickwheel_bit_to_send, s->clickwheel_tx_buf, ns);
+            } else {
+                // clickwheel is receiving, clock in data and check if we have a full command
+                s->clickwheel_rx_buf <<= 1;
+                s->clickwheel_rx_buf |= s->gpio_pin_state[0xe][4] & 0x01;
+                trace_clickwheel_receiving(s->clickwheel_rx_buf, ns);
+                switch(s->clickwheel_rx_buf) {
+                    case 0xb8800003: // reverse of c000011d: read button presses
+                        s->clickwheel_tx_buf = 0x8000023a;
+                        
+                        if(s->clickwheel_select_pressed) s->clickwheel_tx_buf |= (1 << 0x10);
+                        if(s->clickwheel_play_pressed) s->clickwheel_tx_buf |= (1 << 0x11);
+                        if(s->clickwheel_prev_pressed) s->clickwheel_tx_buf |= (1 << 0x12);
+                        if(s->clickwheel_menu_pressed) s->clickwheel_tx_buf |= (1 << 0x13);
+                        if(s->clickwheel_next_pressed) s->clickwheel_tx_buf |= (1 << 0x14);
+
+                        s->clickwheel_skip_cycle = 1;
+                        s->clickwheel_clk = 0;
+                        trace_clickwheel_read_buttons(s->clickwheel_tx_buf);
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+        trace_clickwheel_out(r);
+        break;
     case S5L8702_GPIO_PDAT(15):
         r = s->pdat[port];
         trace_s5l8702_gpio_read("S5L8702_GPIO_PDAT", port, r);
@@ -124,16 +179,13 @@ static uint64_t s5l8702_gpio_read(void *opaque, hwaddr offset,
         trace_s5l8702_gpio_read_cmd(r);
         break;
     default:
-        qemu_log_mask(LOG_UNIMP, "%s: unimplemented read (offset 0x%04x)\n",
-                      __func__, (uint32_t) offset);
+        qemu_log_mask(LOG_UNIMP, "%s: unimplemented read (offset 0x%04x)\n", __func__, (uint32_t) offset);
     }
 
     return r;
 }
 
-static void s5l8702_gpio_write(void *opaque, hwaddr offset,
-                                   uint64_t val, unsigned size)
-{
+static void s5l8702_gpio_write(void *opaque, hwaddr offset, uint64_t val, unsigned size) {
     S5L8702GpioState *s = S5L8702_GPIO(opaque);
     const uint32_t port = offset >> 5;
 
@@ -237,8 +289,13 @@ static void s5l8702_gpio_write(void *opaque, hwaddr offset,
         s->punc[port] = (uint8_t) val;
         break;
     case S5L8702_GPIO_GPIOCMD:
-        trace_s5l8702_gpio_write_cmd(s->gpiocmd, (uint8_t) val);
-        s->gpiocmd = (uint8_t) val;
+        uint8_t set = (val & 0x00FF0000) >> 16;
+        uint8_t pin = (val & 0x0000FF00) >> 8;
+        uint8_t state = (val & 0x000000FF);
+        
+        s->gpio_pin_state[set][pin] = state;
+        s->gpiocmd = state;
+        trace_s5l8702_gpio_write_cmd(set, pin, state);
         if ((s->gpiocmd & ~1) == 0x0000e) {
             qemu_set_irq(s->output[0], s->gpiocmd & 1);
         }
@@ -255,8 +312,7 @@ static const MemoryRegionOps s5l8702_gpio_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
-static void s5l8702_gpio_set(void *opaque, int n, int level)
-{
+static void s5l8702_gpio_set(void *opaque, int n, int level) {
     S5L8702GpioState *s = S5L8702_GPIO(opaque);
     const uint32_t port = S5L8702_GPIO_PORT(n);
 
@@ -267,8 +323,7 @@ static void s5l8702_gpio_set(void *opaque, int n, int level)
     }
 }
 
-static void s5l8702_gpio_reset(DeviceState *dev)
-{
+static void s5l8702_gpio_reset(DeviceState *dev) {
     S5L8702GpioState *s = S5L8702_GPIO(dev);
 
     /* Set default values for registers */
@@ -279,8 +334,7 @@ static void s5l8702_gpio_reset(DeviceState *dev)
     memset(s->punc, 0, sizeof(s->punc));
 }
 
-static void s5l8702_gpio_init(Object *obj)
-{
+static void s5l8702_gpio_init(Object *obj) {
     S5L8702GpioState *s = S5L8702_GPIO(obj);
 
     /* Memory mapping */
@@ -291,10 +345,8 @@ static void s5l8702_gpio_init(Object *obj)
     qdev_init_gpio_out(DEVICE(s), s->output, S5L8702_GPIO_PINS);
 }
 
-static void s5l8702_gpio_class_init(ObjectClass *klass, void *data)
-{
+static void s5l8702_gpio_class_init(ObjectClass *klass, void *data) {
     DeviceClass *dc = DEVICE_CLASS(klass);
-
     dc->reset = s5l8702_gpio_reset;
 }
 

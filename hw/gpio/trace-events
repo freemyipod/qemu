@@ -34,6 +34,11 @@ aspeed_gpio_write(uint64_t offset, uint64_t value) "offset: 0x%" PRIx64 " value 
 
 # s5l8702-gpio.c
 s5l8702_gpio_write(const char *reg, int port, uint32_t val) "%s%d = 0x%08x"
-s5l8702_gpio_write_cmd(uint8_t oldval, uint8_t newval) "old: 0x%02x, new: 0x%02x"
+s5l8702_gpio_write_cmd(uint8_t set, uint8_t pin, uint8_t state) "set %02x, pin %02x, state %02x"
 s5l8702_gpio_read(const char *reg, int port, uint32_t val) "%s%d = 0x%08x"
 s5l8702_gpio_read_cmd(uint8_t val) "0x%02x"
+clickwheel_sending(int bit, uint32_t tx_buf, uint64_t ns) "clickwheel is sending %d, tx_buf = 0x%08x, %ld"
+clickwheel_skip_cycle(void) "skipping clickwheel rising edge"
+clickwheel_receiving(uint32_t rx_buf, uint64_t ns) "clickwheel is receiving, rx_buf = 0x%08x, %ld"
+clickwheel_read_buttons(uint32_t tx_buf) "clickwheel read button presses, buffered: 0x%08x"
+clickwheel_out(uint32_t val) "clickwheel out: 0x%08x"

@@ -37,6 +37,55 @@ static void ipod_nano3g_init(Object *obj)
     }
 }
 
+static void ipod_nano3g_key_event(void *opaque, int keycode) {
+    S5L8702GpioState *s = (S5L8702GpioState *)opaque;
+
+    switch(keycode) {
+        case 28:
+            trace_ipod_nano3g_key_event("select pressed");
+            s->clickwheel_select_pressed = 1;
+            break;
+        case 156:
+            trace_ipod_nano3g_key_event("select released");
+            s->clickwheel_select_pressed = 0;
+            break;
+        case 72:
+            trace_ipod_nano3g_key_event("menu pressed");
+            s->clickwheel_menu_pressed = 1;
+            break;
+        case 200:
+            trace_ipod_nano3g_key_event("menu released");
+            s->clickwheel_menu_pressed = 0;
+            break;
+        case 80:
+            trace_ipod_nano3g_key_event("play pressed");
+            s->clickwheel_play_pressed = 1;
+            break;
+        case 208:
+            trace_ipod_nano3g_key_event("play released");
+            s->clickwheel_play_pressed = 0;
+            break;
+        case 75:
+            trace_ipod_nano3g_key_event("prev pressed");
+            s->clickwheel_prev_pressed = 1;
+            break;
+        case 203:
+            trace_ipod_nano3g_key_event("prev released");
+            s->clickwheel_prev_pressed = 0;
+            break;
+        case 77:
+            trace_ipod_nano3g_key_event("next pressed");
+            s->clickwheel_next_pressed = 1;
+            break;
+        case 205:
+            trace_ipod_nano3g_key_event("next released");
+            s->clickwheel_next_pressed = 0;
+            break;
+        default:
+            break;
+    }    
+}
+
 static void ipod_nano3g_machine_init(MachineState *machine)
 {
     IpodNano3gState *s = IPOD_NANO3G_MACHINE(machine);
@@ -114,6 +163,10 @@ static void ipod_nano3g_machine_init(MachineState *machine)
         error_report("Failed to read bootrom from %s", s->bootrom_path);
         exit(1);
     }
+
+    qemu_add_kbd_event_handler(ipod_nano3g_key_event, &s->soc.gpio);
+    s->soc.gpio.clickwheel_select_pressed = 1;
+    s->soc.gpio.clickwheel_prev_pressed = 1;
 }
 
 static void ipod_nano3g_class_init(ObjectClass *oc, void *data)
