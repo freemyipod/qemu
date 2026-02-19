@@ -36,7 +36,16 @@ OBJECT_DECLARE_SIMPLE_TYPE(S5L8702State, S5L8702)
 #define S5L8702_IRAM1_SIZE          0x00020000  /* 128 KB */
 
 #define S5L8702_VIC_BASE_ADDR       0x38E00000
+#define VIC0_MEM_BASE 0x38E00000
+#define VIC1_MEM_BASE 0x38E01000
+
 #define S5L8702_CLK_BASE_ADDR       0x3C500000
+
+#define S5L8702_UART0_MEM_BASE 0x3CC00000
+#define S5L8702_UART1_MEM_BASE 0x3CC04000
+#define S5L8702_UART2_MEM_BASE 0x3CC08000
+#define S5L8702_UART3_MEM_BASE 0x3CC0C000
+#define S5L8702_UART4_MEM_BASE 0x3CC10000
 
 #define S5L8702_BASE_BOOT_ADDR      0x0
 
@@ -46,6 +55,7 @@ struct S5L8702State {
 
     /*< public >*/
     ARMCPU cpu;
+    qemu_irq **irq;
     MemoryRegion brom;          // S5L8702_BOOTROM_BASE_ADDR
     MemoryRegion brom_alias;    // S5L8702_BASE_BOOT_ADDR
     MemoryRegion iram0;         // S5L8702_IRAM0_BASE_ADDR
@@ -66,6 +76,7 @@ struct S5L8702State {
     S5L8702JpegState jpeg;
     PL080State dma[2];
     S5L8702AtaState ata;
+    DeviceState* uart[4];
 };
 
 #endif /* HW_ARM_S5L8702_H */

@@ -1,12 +1,14 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/module.h"
+#include "sysemu/sysemu.h"
 #include "cpu.h"
 #include "exec/address-spaces.h"
 #include "hw/boards.h"
 #include "hw/qdev-core.h"
 #include "hw/arm/s5l8702.h"
 #include "hw/misc/unimp.h"
+#include "hw/arm/exynos4210.h"
 #include "trace.h"
 
 #define S5L8702_LCD_BASE    0x38300000
@@ -25,8 +27,7 @@ static void allocate_ram(MemoryRegion *top, const char *name, uint32_t addr, uin
     memory_region_add_subregion(top, addr, sec);
 }
 
-static void s5l8702_init(Object *obj)
-{
+static void s5l8702_init(Object *obj) {
     S5L8702State *s = S5L8702(obj);
 
     trace_s5l8702_init();
@@ -73,12 +74,11 @@ static void s5l8702_init(Object *obj)
     for (uint32_t i = 0; i < ARRAY_SIZE(s->dma); i++) {
         object_initialize_child(obj, "dma[*]", &s->dma[i], TYPE_PL080);
     }
-
+    
     object_initialize_child(obj, "ata", &s->ata, TYPE_S5L8702_ATA);
 }
 
-static void s5l8702_realize(DeviceState *dev, Error **errp)
-{
+static void s5l8702_realize(DeviceState *dev, Error **errp) {
     S5L8702State *s = S5L8702(dev);
     MemoryRegion *system_memory = get_system_memory();
 
@@ -87,11 +87,14 @@ static void s5l8702_realize(DeviceState *dev, Error **errp)
     qdev_realize(DEVICE(&s->cpu), NULL, &error_fatal);
 
     /* VIC */
+    s->irq = g_malloc0(sizeof(qemu_irq *) * 2);
     for (int i = 0; i < ARRAY_SIZE(s->vic); i++) {
         sysbus_realize(SYS_BUS_DEVICE(&s->vic[i]), &error_fatal);
         sysbus_mmio_map(SYS_BUS_DEVICE(&s->vic[i]), 0, S5L8702_VIC_BASE_ADDR + (i * 0x1000));
-        // sysbus_connect_irq(SYS_BUS_DEVICE(&s->vic[i]), 0, cpu_irq[0]);
-        // sysbus_connect_irq(SYS_BUS_DEVICE(&s->vic[i]), 1, cpu_fiq[0]);
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->vic[i]), 0, qdev_get_gpio_in(DEVICE(&s->cpu), 0));
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->vic[i]), 1, qdev_get_gpio_in(DEVICE(&s->cpu), 1));
+        s->irq[i] = g_malloc0(sizeof(qemu_irq) * 32);
+        for (int k = 0; k < 32; k++) { s->irq[i][k] = qdev_get_gpio_in(&s->vic[i], i); }
     }
 
     /* CLK */
@@ -172,6 +175,9 @@ static void s5l8702_realize(DeviceState *dev, Error **errp)
     memory_region_init_ram(&s->iram1, OBJECT(dev), "s5l8702.iram1", S5L8702_IRAM1_SIZE, &error_fatal);
     memory_region_add_subregion(system_memory, S5L8702_IRAM1_BASE_ADDR, &s->iram1);
 
+    /* UART */
+    exynos4210_uart_create(S5L8702_UART0_MEM_BASE, 256, 0, serial_hd(0), s->irq[0][24]);
+
     create_unimplemented_device("unimplemented-mem", 0x0, 0xFFFFFFFF);
     create_unimplemented_device("wdt", 0x3c800000, 0x100000);
     create_unimplemented_device("miu", 0x38100000, 0x100000);
@@ -181,6 +187,8 @@ static void s5l8702_realize(DeviceState *dev, Error **errp)
     create_unimplemented_device("phy", 0x3c400000, 0x100000);
     create_unimplemented_device("vic", 0x38E00000, 0x100000);
     create_unimplemented_device("unknown-dev-1", 0x39a00000, 0x100000);
+    create_unimplemented_device("clickwheel", 0x3C200000, 0x20);
+    create_unimplemented_device("nand", 0x38A00000, 0x1000);
 }
 
 static void s5l8702_class_init(ObjectClass *oc, void *data)

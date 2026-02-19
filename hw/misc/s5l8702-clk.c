@@ -72,31 +72,25 @@ enum {
     REG_PWRCON4_RST = 0x00000000,
 };
 
-static uint64_t s5l8702_clk_read(void *opaque, hwaddr offset,
-                                      unsigned size)
-{
+static uint64_t s5l8702_clk_read(void *opaque, hwaddr offset, unsigned size) {
     const S5L8702ClkState *s = S5L8702_CLK(opaque);
     const uint32_t idx = REG_INDEX(offset);
 
     switch (offset) {
     default:
-        qemu_log_mask(LOG_UNIMP, "%s: unimplemented read (offset 0x%04x)\n",
-                      __func__, (uint32_t) offset);
+        // qemu_log_mask(LOG_UNIMP, "%s: unimplemented read (offset 0x%04x)\n", __func__, (uint32_t) offset);
     }
 
     return s->regs[idx];
 }
 
-static void s5l8702_clk_write(void *opaque, hwaddr offset,
-                                   uint64_t val, unsigned size)
-{
+static void s5l8702_clk_write(void *opaque, hwaddr offset, uint64_t val, unsigned size) {
     S5L8702ClkState *s = S5L8702_CLK(opaque);
     const uint32_t idx = REG_INDEX(offset);
 
     switch (offset) {
     default:
-        qemu_log_mask(LOG_UNIMP, "%s: unimplemented write (offset 0x%04x, value 0x%08x)\n",
-                      __func__, (uint32_t) offset, (uint32_t) val);
+        // qemu_log_mask(LOG_UNIMP, "%s: unimplemented write (offset 0x%04x, value 0x%08x)\n", __func__, (uint32_t) offset, (uint32_t) val);
     }
 
     s->regs[idx] = (uint32_t) val;
