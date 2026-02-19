@@ -34,9 +34,9 @@ static void s5l8702_init(Object *obj) {
 
     object_initialize_child(obj, "cpu", &(s->cpu), ARM_CPU_TYPE_NAME("arm926"));
 
-    for (uint32_t i = 0; i < ARRAY_SIZE(s->vic); i++) {
-        object_initialize_child(obj, "vic[*]", &s->vic[i], TYPE_PL192);
-    }
+    // for (uint32_t i = 0; i < ARRAY_SIZE(s->vic); i++) {
+    //     object_initialize_child(obj, "vic[*]", &s->vic[i], TYPE_PL192);
+    // }
 
     /* PCLK */
     object_initialize_child(obj, "pclk", &s->pclk, TYPE_CLOCK);
@@ -87,15 +87,22 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
     qdev_realize(DEVICE(&s->cpu), NULL, &error_fatal);
 
     /* VIC */
+    // setup VICs
     s->irq = g_malloc0(sizeof(qemu_irq *) * 2);
-    for (int i = 0; i < ARRAY_SIZE(s->vic); i++) {
-        sysbus_realize(SYS_BUS_DEVICE(&s->vic[i]), &error_fatal);
-        sysbus_mmio_map(SYS_BUS_DEVICE(&s->vic[i]), 0, S5L8702_VIC_BASE_ADDR + (i * 0x1000));
-        sysbus_connect_irq(SYS_BUS_DEVICE(&s->vic[i]), 0, qdev_get_gpio_in(DEVICE(&s->cpu), 0));
-        sysbus_connect_irq(SYS_BUS_DEVICE(&s->vic[i]), 1, qdev_get_gpio_in(DEVICE(&s->cpu), 1));
-        s->irq[i] = g_malloc0(sizeof(qemu_irq) * 32);
-        for (int k = 0; k < 32; k++) { s->irq[i][k] = qdev_get_gpio_in(&s->vic[i], i); }
-    }
+    DeviceState *x = pl192_manual_init("vic0", qdev_get_gpio_in(DEVICE(&s->cpu), ARM_CPU_IRQ), qdev_get_gpio_in(DEVICE(&s->cpu), ARM_CPU_FIQ), NULL);
+    s->vic0 = PL192(x);
+    memory_region_add_subregion(get_system_memory(), VIC0_MEM_BASE, &s->vic0->iomem);
+    s->irq[0] = g_malloc0(sizeof(qemu_irq) * 32);
+    for (int i = 0; i < 32; i++) { s->irq[0][i] = qdev_get_gpio_in(x, i); }
+
+    x = pl192_manual_init("vic1", NULL);
+    s->vic1 = PL192(x);
+    memory_region_add_subregion(get_system_memory(), VIC1_MEM_BASE, &s->vic1->iomem);
+    s->irq[1] = g_malloc0(sizeof(qemu_irq) * 32);
+    for (int i = 0; i < 32; i++) { s->irq[1][i] = qdev_get_gpio_in(x, i); }
+
+    s->vic1->daisy = s->vic0;
+
 
     /* CLK */
     sysbus_realize(SYS_BUS_DEVICE(&s->clk), &error_fatal);
@@ -177,6 +184,10 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
 
     /* UART */
     exynos4210_uart_create(S5L8702_UART0_MEM_BASE, 256, 0, serial_hd(0), s->irq[0][24]);
+    exynos4210_uart_create(S5L8702_UART1_MEM_BASE, 256, 0, serial_hd(1), s->irq[0][25]);
+    exynos4210_uart_create(S5L8702_UART2_MEM_BASE, 256, 0, serial_hd(2), s->irq[0][26]);
+    exynos4210_uart_create(S5L8702_UART3_MEM_BASE, 256, 0, serial_hd(3), s->irq[0][27]);
+    exynos4210_uart_create(S5L8702_UART4_MEM_BASE, 256, 0, serial_hd(4), s->irq[0][28]);
 
     create_unimplemented_device("unimplemented-mem", 0x0, 0xFFFFFFFF);
     create_unimplemented_device("wdt", 0x3c800000, 0x100000);
@@ -185,7 +196,6 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
     // 👇🏻 https://github.com/Rockbox/rockbox/blob/ed369e1d475658eccb5eb2221d757e7d66796e90/firmware/target/arm/s5l8702/clocking-s5l8702.h#L216
     create_unimplemented_device("sm1_div", 0x38501000, 0x04);
     create_unimplemented_device("phy", 0x3c400000, 0x100000);
-    create_unimplemented_device("vic", 0x38E00000, 0x100000);
     create_unimplemented_device("unknown-dev-1", 0x39a00000, 0x100000);
     create_unimplemented_device("clickwheel", 0x3C200000, 0x20);
     create_unimplemented_device("nand", 0x38A00000, 0x1000);

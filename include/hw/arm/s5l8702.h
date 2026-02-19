@@ -60,7 +60,8 @@ struct S5L8702State {
     MemoryRegion brom_alias;    // S5L8702_BASE_BOOT_ADDR
     MemoryRegion iram0;         // S5L8702_IRAM0_BASE_ADDR
     MemoryRegion iram1;         // S5L8702_IRAM1_BASE_ADDR
-    PL192State vic[2];
+    PL192State* vic0;
+    PL192State* vic1;
     Clock pclk;
     Clock eclk;
     Clock extclk0;
