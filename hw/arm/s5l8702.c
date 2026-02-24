@@ -87,7 +87,6 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
     qdev_realize(DEVICE(&s->cpu), NULL, &error_fatal);
 
     /* VIC */
-    // setup VICs
     s->irq = g_malloc0(sizeof(qemu_irq *) * 2);
     DeviceState *x = pl192_manual_init("vic0", qdev_get_gpio_in(DEVICE(&s->cpu), ARM_CPU_IRQ), qdev_get_gpio_in(DEVICE(&s->cpu), ARM_CPU_FIQ), NULL);
     s->vic0 = PL192(x);
@@ -103,6 +102,13 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
 
     s->vic1->daisy = s->vic0;
 
+    DeviceState *glue = sysbus_create_simple("vic-edge-glue", 0x38E02000, NULL);
+
+    /* Wiring: Glue Outputs -> VIC Inputs */
+    for (int i = 0; i < 32; i++) {
+        qdev_connect_gpio_out(glue, i, qdev_get_gpio_in(s->vic0, i));
+        qdev_connect_gpio_out(glue, i + 32, qdev_get_gpio_in(s->vic1, i));
+    }
 
     /* CLK */
     sysbus_realize(SYS_BUS_DEVICE(&s->clk), &error_fatal);
@@ -183,11 +189,11 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
     memory_region_add_subregion(system_memory, S5L8702_IRAM1_BASE_ADDR, &s->iram1);
 
     /* UART */
-    exynos4210_uart_create(S5L8702_UART0_MEM_BASE, 256, 0, serial_hd(0), s->irq[0][24]);
-    exynos4210_uart_create(S5L8702_UART1_MEM_BASE, 256, 0, serial_hd(1), s->irq[0][25]);
-    exynos4210_uart_create(S5L8702_UART2_MEM_BASE, 256, 0, serial_hd(2), s->irq[0][26]);
-    exynos4210_uart_create(S5L8702_UART3_MEM_BASE, 256, 0, serial_hd(3), s->irq[0][27]);
-    exynos4210_uart_create(S5L8702_UART4_MEM_BASE, 256, 0, serial_hd(4), s->irq[0][28]);
+    exynos4210_uart_create(S5L8702_UART0_MEM_BASE, 256, 0, serial_hd(0), qdev_get_gpio_in(glue, 24));
+    exynos4210_uart_create(S5L8702_UART1_MEM_BASE, 256, 0, serial_hd(1), qdev_get_gpio_in(glue, 25));
+    exynos4210_uart_create(S5L8702_UART2_MEM_BASE, 256, 0, serial_hd(2), qdev_get_gpio_in(glue, 26));
+    exynos4210_uart_create(S5L8702_UART3_MEM_BASE, 256, 0, serial_hd(3), qdev_get_gpio_in(glue, 27));
+    exynos4210_uart_create(S5L8702_UART4_MEM_BASE, 256, 0, serial_hd(4), qdev_get_gpio_in(glue, 28));
 
     create_unimplemented_device("unimplemented-mem", 0x0, 0xFFFFFFFF);
     create_unimplemented_device("wdt", 0x3c800000, 0x100000);

@@ -122,10 +122,14 @@ static const Exynos4210UartReg exynos4210_uart_regs[] = {
 #define ULCON_STOP_BIT_SHIFT  1
 
 /* UART Tx/Rx Status */
-#define UTRSTAT_Rx_TIMEOUT              0x8
-#define UTRSTAT_TRANSMITTER_EMPTY       0x4
-#define UTRSTAT_Tx_BUFFER_EMPTY         0x2
-#define UTRSTAT_Rx_BUFFER_DATA_READY    0x1
+#define UTRSTAT_Rx_BUFFER_DATA_READY    (1 << 0)
+#define UTRSTAT_Tx_BUFFER_EMPTY         (1 << 1)
+#define UTRSTAT_TRANSMITTER_EMPTY       (1 << 2)
+#define UTRSTAT_Rx_TIMEOUT              (1 << 3) /* Rx timeout INT status */
+#define UTRSTAT_RX_INT                  (1 << 4) /* Rx interrupt status */
+#define UTRSTAT_TX_INT                  (1 << 5) /* Tx interrupt status */
+#define UTRSTAT_ERR_INT                 (1 << 6) /* Error interrupt status */
+#define UTRSTAT_MODEM_INT               (1 << 7) /* Modem interrupt status */
 
 /* UART Error Status */
 #define UERSTAT_OVERRUN  0x1
@@ -314,6 +318,20 @@ static void exynos4210_uart_update_irq(Exynos4210UartState *s)
 
     s->reg[I_(UINTP)] = s->reg[I_(UINTSP)] & ~s->reg[I_(UINTM)];
 
+    /* Mirror UINTSP interrupt sources into UTRSTAT bits 4-7 */
+    if (s->reg[I_(UINTSP)] & UINTSP_RXD) {
+        s->reg[I_(UTRSTAT)] |= UTRSTAT_RX_INT;
+    }
+    if (s->reg[I_(UINTSP)] & UINTSP_TXD) {
+        s->reg[I_(UTRSTAT)] |= UTRSTAT_TX_INT;
+    }
+    if (s->reg[I_(UINTSP)] & UINTSP_ERROR) {
+        s->reg[I_(UTRSTAT)] |= UTRSTAT_ERR_INT;
+    }
+    if (s->reg[I_(UINTSP)] & UINTSP_MODEM) {
+        s->reg[I_(UTRSTAT)] |= UTRSTAT_MODEM_INT;
+    }
+
     if (s->reg[I_(UINTP)]) {
         qemu_irq_raise(s->irq);
         trace_exynos_uart_irq_raised(s->channel, s->reg[I_(UINTP)]);
@@ -450,9 +468,31 @@ static void exynos4210_uart_write(void *opaque, hwaddr offset,
         exynos4210_uart_update_irq(s);
         break;
     case UTRSTAT:
+        /*
+         * Bits 3-7 are write-1-to-clear interrupt status flags.
+         * Clearing UTRSTAT interrupt bits also clears the corresponding
+         * UINTSP source bits so the interrupt line is de-asserted.
+         */
         if (val & UTRSTAT_Rx_TIMEOUT) {
             s->reg[I_(UTRSTAT)] &= ~UTRSTAT_Rx_TIMEOUT;
         }
+        if (val & UTRSTAT_RX_INT) {
+            s->reg[I_(UTRSTAT)] &= ~UTRSTAT_RX_INT;
+            s->reg[I_(UINTSP)] &= ~UINTSP_RXD;
+        }
+        if (val & UTRSTAT_TX_INT) {
+            s->reg[I_(UTRSTAT)] &= ~UTRSTAT_TX_INT;
+            s->reg[I_(UINTSP)] &= ~UINTSP_TXD;
+        }
+        if (val & UTRSTAT_ERR_INT) {
+            s->reg[I_(UTRSTAT)] &= ~UTRSTAT_ERR_INT;
+            s->reg[I_(UINTSP)] &= ~UINTSP_ERROR;
+        }
+        if (val & UTRSTAT_MODEM_INT) {
+            s->reg[I_(UTRSTAT)] &= ~UTRSTAT_MODEM_INT;
+            s->reg[I_(UINTSP)] &= ~UINTSP_MODEM;
+        }
+        exynos4210_uart_update_irq(s);
         break;
     case UERSTAT:
     case UFSTAT:
