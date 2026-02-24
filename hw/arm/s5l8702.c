@@ -77,6 +77,7 @@ static void s5l8702_init(Object *obj) {
     
     object_initialize_child(obj, "ata", &s->ata, TYPE_S5L8702_ATA);
     object_initialize_child(obj, "clickwheel", &s->clickwheel, TYPE_S5L8702_CLICKWHEEL);
+    object_initialize_child(obj, "chipid", &s->chipid, TYPE_S5L8702_CHIPID);
 }
 
 static void s5l8702_realize(DeviceState *dev, Error **errp) {
@@ -181,6 +182,10 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->clickwheel), 0, S5L8702_CLICKWHEEL_BASE);
     sysbus_connect_irq(SYS_BUS_DEVICE(&s->clickwheel), 0, qdev_get_gpio_in(glue, S5L8702_CWHEEL_IRQ_GLUE));
 
+    /* ChipID */
+    sysbus_realize(SYS_BUS_DEVICE(&s->chipid), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->chipid), 0, S5L8702_CHIPID_BASE);
+
     /* BootROM */
     memory_region_init_ram(&s->brom, OBJECT(dev), "s5l8702.bootrom", S5L8702_BOOTROM_SIZE, &error_fatal);
     memory_region_add_subregion(system_memory, S5L8702_BOOTROM_BASE_ADDR, &s->brom);
@@ -205,7 +210,6 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
     create_unimplemented_device("unimplemented-mem", 0x0, 0xFFFFFFFF);
     create_unimplemented_device("wdt", 0x3c800000, 0x100000);
     create_unimplemented_device("miu", 0x38100000, 0x100000);
-    create_unimplemented_device("chipid", 0x3D100000, 0x100000); // I think so, at least
     // 👇🏻 https://github.com/Rockbox/rockbox/blob/ed369e1d475658eccb5eb2221d757e7d66796e90/firmware/target/arm/s5l8702/clocking-s5l8702.h#L216
     create_unimplemented_device("sm1_div", 0x38501000, 0x04);
     create_unimplemented_device("phy", 0x3c400000, 0x100000);

@@ -15,6 +15,7 @@
 #include "hw/i2c/s5l8702-i2c.h"
 #include "hw/misc/s5l8702-lcd.h"
 #include "hw/misc/s5l8702-jpeg.h"
+#include "hw/misc/s5l8702-chipid.h"
 #include "hw/misc/s5l8702-clickwheel.h"
 #include "hw/dma/pl080.h"
 #include "hw/ide/s5l8702-ata.h"
@@ -79,6 +80,7 @@ struct S5L8702State {
     PL080State dma[2];
     S5L8702AtaState ata;
     S5L8702ClickwheelState clickwheel;
+    S5L8702ChipIDState chipid;
     DeviceState* uart[4];
 };
 
