@@ -314,3 +314,7 @@ pcf5063x_unknown_write(uint8_t addr) "unknown write addr 0x%02x"
 # s5l8702-clickwheel.c
 s5l8702_clickwheel_reset(void) "reset"
 s5l8702_clickwheel_init(void) "init"
+s5l8702_clickwheel_init_response(void) "generating init response interrupt"
+s5l8702_clickwheel_button_update(void) "button state changed, raising interrupt"
+s5l8702_clickwheel_reg_read(const char *reg, uint32_t val) "%s -> 0x%08x"
+s5l8702_clickwheel_reg_write(const char *reg, uint32_t val) "%s <- 0x%08x"

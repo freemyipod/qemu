@@ -46,6 +46,7 @@ softmmu_ss.add(when: 'CONFIG_ALLWINNER_H3', if_true: files('allwinner-h3-sysctrl
 softmmu_ss.add(when: 'CONFIG_ALLWINNER_H3', if_true: files('allwinner-sid.c'))
 softmmu_ss.add(when: 'CONFIG_S5L8702', if_true: files(
   's5l8702-aes.c',
+  's5l8702-clickwheel.c',
   's5l8702-clk.c',
   's5l8702-jpeg.c',
   's5l8702-lcd.c',

@@ -38,7 +38,8 @@ static void ipod_nano3g_init(Object *obj)
 }
 
 static void ipod_nano3g_key_event(void *opaque, int keycode) {
-    S5L8702GpioState *s = (S5L8702GpioState *)opaque;
+    S5L8702State *soc = (S5L8702State *)opaque;
+    S5L8702GpioState *s = &soc->gpio;
 
     switch(keycode) {
         case 28:
@@ -82,8 +83,11 @@ static void ipod_nano3g_key_event(void *opaque, int keycode) {
             s->clickwheel_next_pressed = 0;
             break;
         default:
-            break;
-    }    
+            return; /* unrecognised key – do not notify clickwheel */
+    }
+
+    /* Notify the dedicated clickwheel controller peripheral */
+    qemu_irq_pulse(qdev_get_gpio_in_named(DEVICE(&soc->clickwheel), "button-update", 0));
 }
 
 static void ipod_nano3g_machine_init(MachineState *machine)
@@ -164,7 +168,9 @@ static void ipod_nano3g_machine_init(MachineState *machine)
         exit(1);
     }
 
-    qemu_add_kbd_event_handler(ipod_nano3g_key_event, &s->soc.gpio);
+    qemu_add_kbd_event_handler(ipod_nano3g_key_event, &s->soc);
+
+    // HACK to get into diagnostic mode
     s->soc.gpio.clickwheel_select_pressed = 1;
     s->soc.gpio.clickwheel_prev_pressed = 1;
 }

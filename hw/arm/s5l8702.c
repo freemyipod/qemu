@@ -76,6 +76,7 @@ static void s5l8702_init(Object *obj) {
     }
     
     object_initialize_child(obj, "ata", &s->ata, TYPE_S5L8702_ATA);
+    object_initialize_child(obj, "clickwheel", &s->clickwheel, TYPE_S5L8702_CLICKWHEEL);
 }
 
 static void s5l8702_realize(DeviceState *dev, Error **errp) {
@@ -174,6 +175,12 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
     sysbus_realize(SYS_BUS_DEVICE(&s->ata), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->ata), 0, S5L8702_ATA_BASE);
 
+    /* Clickwheel controller */
+    s->clickwheel.gpio = &s->gpio;
+    sysbus_realize(SYS_BUS_DEVICE(&s->clickwheel), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->clickwheel), 0, S5L8702_CLICKWHEEL_BASE);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->clickwheel), 0, qdev_get_gpio_in(glue, S5L8702_CWHEEL_IRQ_GLUE));
+
     /* BootROM */
     memory_region_init_ram(&s->brom, OBJECT(dev), "s5l8702.bootrom", S5L8702_BOOTROM_SIZE, &error_fatal);
     memory_region_add_subregion(system_memory, S5L8702_BOOTROM_BASE_ADDR, &s->brom);
@@ -203,7 +210,6 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
     create_unimplemented_device("sm1_div", 0x38501000, 0x04);
     create_unimplemented_device("phy", 0x3c400000, 0x100000);
     create_unimplemented_device("unknown-dev-1", 0x39a00000, 0x100000);
-    create_unimplemented_device("clickwheel", 0x3C200000, 0x20);
     create_unimplemented_device("nand", 0x38A00000, 0x1000);
 }
 
