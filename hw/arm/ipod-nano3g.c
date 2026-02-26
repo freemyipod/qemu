@@ -24,6 +24,19 @@ static void ipod_nano3g_set_bootrom_path(Object *obj, const char *value, Error *
     s->bootrom_path = g_strdup(value);
 }
 
+static char *ipod_nano3g_get_nand_path(Object *obj, Error **errp)
+{
+    IpodNano3gState *s = IPOD_NANO3G_MACHINE(obj);
+    return g_strdup(s->nand_path);
+}
+
+static void ipod_nano3g_set_nand_path(Object *obj, const char *value, Error **errp)
+{
+    IpodNano3gState *s = IPOD_NANO3G_MACHINE(obj);
+    g_free(s->nand_path);
+    s->nand_path = g_strdup(value);
+}
+
 static void ipod_nano3g_init(Object *obj)
 {
     MachineState *machine = MACHINE(obj);
@@ -33,6 +46,11 @@ static void ipod_nano3g_init(Object *obj)
 
     if (!object_property_add_str(obj, "bootrom", ipod_nano3g_get_bootrom_path, ipod_nano3g_set_bootrom_path)) {
         error_report("ipod_nano3g_init: failed to add bootrom property\n");
+        exit(1);
+    }
+
+    if (!object_property_add_str(obj, "nand-path", ipod_nano3g_get_nand_path, ipod_nano3g_set_nand_path)) {
+        error_report("ipod_nano3g_init: failed to add nand-path property\n");
         exit(1);
     }
 }
@@ -127,6 +145,9 @@ static void ipod_nano3g_machine_init(MachineState *machine)
 
     /* Initialize s5l8702 soc */
     object_initialize_child(OBJECT(s), "soc", &s->soc, TYPE_S5L8702);
+    if (s->nand_path) {
+        s->soc.nand.nand_path = g_strdup(s->nand_path);
+    }
     sysbus_realize(SYS_BUS_DEVICE(&s->soc), &error_fatal);
 
     /* DRAM */

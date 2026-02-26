@@ -51,6 +51,8 @@ softmmu_ss.add(when: 'CONFIG_S5L8702', if_true: files(
   's5l8702-clk.c',
   's5l8702-jpeg.c',
   's5l8702-lcd.c',
+  's5l8702-nand.c',
+  's5l8702-nand-ecc.c',
   's5l8702-sha.c',
 ))
 softmmu_ss.add(when: 'CONFIG_AXP209_PMU', if_true: files('axp209.c'))

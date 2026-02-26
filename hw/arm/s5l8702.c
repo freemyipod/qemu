@@ -78,6 +78,8 @@ static void s5l8702_init(Object *obj) {
     object_initialize_child(obj, "ata", &s->ata, TYPE_S5L8702_ATA);
     object_initialize_child(obj, "clickwheel", &s->clickwheel, TYPE_S5L8702_CLICKWHEEL);
     object_initialize_child(obj, "chipid", &s->chipid, TYPE_S5L8702_CHIPID);
+    object_initialize_child(obj, "nand", &s->nand, TYPE_S5L8702_NAND);
+    object_initialize_child(obj, "nand_ecc", &s->nand_ecc, TYPE_S5L8702_NAND_ECC);
 }
 
 static void s5l8702_realize(DeviceState *dev, Error **errp) {
@@ -186,6 +188,16 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
     sysbus_realize(SYS_BUS_DEVICE(&s->chipid), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->chipid), 0, S5L8702_CHIPID_BASE);
 
+    /* NAND Flash Controller */
+    sysbus_realize(SYS_BUS_DEVICE(&s->nand), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->nand), 0, S5L8702_NAND_BASE);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->nand), 0, qdev_get_gpio_in(glue, S5L8702_NAND_IRQ));
+
+    /* NAND ECC Engine */
+    sysbus_realize(SYS_BUS_DEVICE(&s->nand_ecc), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->nand_ecc), 0, S5L8702_NAND_ECC_BASE);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->nand_ecc), 0, qdev_get_gpio_in(glue, S5L8702_NAND_ECC_IRQ));
+
     /* BootROM */
     memory_region_init_ram(&s->brom, OBJECT(dev), "s5l8702.bootrom", S5L8702_BOOTROM_SIZE, &error_fatal);
     memory_region_add_subregion(system_memory, S5L8702_BOOTROM_BASE_ADDR, &s->brom);
@@ -214,7 +226,6 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
     create_unimplemented_device("sm1_div", 0x38501000, 0x04);
     create_unimplemented_device("phy", 0x3c400000, 0x100000);
     create_unimplemented_device("unknown-dev-1", 0x39a00000, 0x100000);
-    create_unimplemented_device("nand", 0x38A00000, 0x1000);
 }
 
 static void s5l8702_class_init(ObjectClass *oc, void *data)

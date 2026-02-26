@@ -17,6 +17,8 @@
 #include "hw/misc/s5l8702-jpeg.h"
 #include "hw/misc/s5l8702-chipid.h"
 #include "hw/misc/s5l8702-clickwheel.h"
+#include "hw/misc/s5l8702-nand.h"
+#include "hw/misc/s5l8702-nand-ecc.h"
 #include "hw/dma/pl080.h"
 #include "hw/ide/s5l8702-ata.h"
 
@@ -81,6 +83,8 @@ struct S5L8702State {
     S5L8702AtaState ata;
     S5L8702ClickwheelState clickwheel;
     S5L8702ChipIDState chipid;
+    S5L8702NandState nand;
+    S5L8702NandEccState nand_ecc;
     DeviceState* uart[4];
 };
 
