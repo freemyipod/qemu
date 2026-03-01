@@ -1,15 +1,16 @@
 #include "qemu/osdep.h"
 #include "qemu/units.h"
-#include "hw/sysbus.h"
 #include "qemu/log.h"
+#include "hw/sysbus.h"
+#include "hw/irq.h"
+#include "hw/clock.h"
 #include "qemu/module.h"
 #include "hw/timer/s5l8702-timer.h"
+#include "trace.h"
 
-#if 0
-#define TIMER_LOG printf
-#else
-#define TIMER_LOG(...)
-#endif
+#define SCHED_EVT_INT0  BIT(0)
+#define SCHED_EVT_INT1  BIT(1)
+#define SCHED_EVT_OVF   BIT(2)
 
 // 16-bit timer registers
 #define S5L8702_TIMER_TCON_16(x)    ((x) * 0x20 + 0x00)
@@ -56,123 +57,215 @@
 // Global timer registers
 #define S5L8702_TIMER_TSTAT         0x118
 
+static void s5l8702_timer_schedule(S5L8702Timer *t);
+
+static uint32_t s5l8702_timer_max_val(S5L8702Timer *t) {
+    return (t->type == S5L8702_TIMER_TYPE_16) ? 0xFFFF : 0xFFFFFFFF;
+}
+
+static uint64_t s5l8702_timer_get_freq(S5L8702Timer *t) {
+    S5L8702TimerCtrlState *s = t->ctrl;
+    uint32_t prescale = (t->tpre & 0x3FF) + 1;
+    uint32_t div;
+    Clock *clk;
+
+    if (t->tcon & S5L8702_TIMER_TCON_ECLK) clk = s->eclk;
+    else clk = s->pclk;
+
+    switch (t->tcon & S5L8702_TIMER_TCON_CS_MASK) {
+        case S5L8702_TIMER_TCON_CS(0): div = 2; break;
+        case S5L8702_TIMER_TCON_CS(1): div = 4; break;
+        case S5L8702_TIMER_TCON_CS(2): div = 16; break;
+        case S5L8702_TIMER_TCON_CS(3): div = 64; break;
+        case S5L8702_TIMER_TCON_CS(4):
+        case S5L8702_TIMER_TCON_CS(5): clk = s->extclk0; div = 1; break;
+        case S5L8702_TIMER_TCON_CS(6):
+        case S5L8702_TIMER_TCON_CS(7): clk = s->extclk1; div = 1; break;
+        default: div = 1; break;
+    }
+
+    uint64_t base = clock_get_hz(clk);
+    uint64_t denom = (uint64_t)div * prescale;
+    if (base == 0 || denom == 0) return 0;
+    return base / denom;
+}
+
+static uint32_t s5l8702_timer_current_count(S5L8702Timer *t) {
+    if (!t->running) return t->tcnt;
+
+    uint64_t freq = s5l8702_timer_get_freq(t);
+    if (freq == 0) return t->tcnt;
+
+    uint64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    uint64_t elapsed_ns = now - t->start_ns;
+    uint64_t elapsed_ticks = muldiv64(elapsed_ns, freq, NANOSECONDS_PER_SECOND);
+    uint32_t max_val = s5l8702_timer_max_val(t);
+
+    return (uint32_t)((t->start_count + elapsed_ticks) & (uint64_t)max_val);
+}
+
+static uint64_t s5l8702_dist_to_count(uint32_t cur, uint32_t target, uint32_t max_val) {
+    if (target > cur)  return target - cur;
+    /* target <= cur: must wrap around */
+    return (uint64_t)(max_val - cur) + 1 + target;
+}
+
 static void s5l8702_timer_update(S5L8702Timer *t) {
-    // TODO
+    S5L8702TimerCtrlState *s = t->ctrl;
+
+    /* Recompute the shared IRQ line for the group this timer belongs to */
+    bool is_32bit = (t->type == S5L8702_TIMER_TYPE_32);
+    uint32_t start = is_32bit ? S5L8702_TIMER_COUNT_16 : 0;
+    uint32_t end = is_32bit ? S5L8702_TIMER_COUNT : S5L8702_TIMER_COUNT_16;
+
+    bool irq = false;
+    for (uint32_t i = start; i < end; i++) {
+        S5L8702Timer *ti = &s->timer[i];
+        if (((ti->tcon & S5L8702_TIMER_TCON_OVF)  && (ti->tcon & S5L8702_TIMER_TCON_OVF_EN)) ||
+            ((ti->tcon & S5L8702_TIMER_TCON_INT1) && (ti->tcon & S5L8702_TIMER_TCON_INT1_EN)) ||
+            ((ti->tcon & S5L8702_TIMER_TCON_INT0) && (ti->tcon & S5L8702_TIMER_TCON_INT0_EN))) {
+            irq = true;
+            break;
+        }
+    }
+
+    qemu_set_irq(is_32bit ? s->irq_32bit : s->irq_16bit, irq);
+}
+
+/*
+ * Set the TSTAT status bit for 32-bit timers when an interrupt fires.
+ * TSTAT bits are only set here (on fire), and cleared by the guest.
+ */
+static void s5l8702_timer_set_tstat(S5L8702Timer *t) {
+    static const uint32_t tstat_bits[S5L8702_TIMER_COUNT] = {
+        [4] = S5L8702_TIMER_TSTAT_INTE,
+        [5] = S5L8702_TIMER_TSTAT_INTF,
+        [6] = S5L8702_TIMER_TSTAT_INTG,
+        [7] = S5L8702_TIMER_TSTAT_INTH,
+    };
+
+    S5L8702TimerCtrlState *s = t->ctrl;
+    uint32_t idx = (uint32_t)(t - &s->timer[0]);
+    if (idx >= S5L8702_TIMER_COUNT_16 && idx < S5L8702_TIMER_COUNT) {
+        s->tstat |= tstat_bits[idx];
+    }
 }
 
 static void s5l8702_timer_clk_select(S5L8702Timer *t, uint32_t tcon, uint32_t tpre) {
-    uint32_t prescale = (tpre & 0x3FF) + 1;
-
     if (tcon & S5L8702_TIMER_TCON_ECLK) {
         switch (tcon & S5L8702_TIMER_TCON_CS_MASK) {
-        case S5L8702_TIMER_TCON_CS(0): // ECLK / 2
-            TIMER_LOG("%s: tcon->cs = ECLK / 2\n", __func__);
-            // clock_set_mul_div(&t->eclk, 1, 2 * prescale);
+        case S5L8702_TIMER_TCON_CS(0):
+            trace_s5l8702_timer_clk_select("ECLK / 2");
             break;
-        case S5L8702_TIMER_TCON_CS(1): // ECLK / 4
-            TIMER_LOG("%s: tcon->cs = ECLK / 4\n", __func__);
-            // clock_set_mul_div(&t->eclk, 1, 4 * prescale);
+        case S5L8702_TIMER_TCON_CS(1):
+            trace_s5l8702_timer_clk_select("ECLK / 4");
             break;
-        case S5L8702_TIMER_TCON_CS(2): // ECLK / 16
-            TIMER_LOG("%s: tcon->cs = ECLK / 16\n", __func__);
-            // clock_set_mul_div(&t->eclk, 1, 16 * prescale);
+        case S5L8702_TIMER_TCON_CS(2):
+            trace_s5l8702_timer_clk_select("ECLK / 16");
             break;
-        case S5L8702_TIMER_TCON_CS(3): // ECLK / 64
-            TIMER_LOG("%s: tcon->cs = ECLK / 64\n", __func__);
-            // clock_set_mul_div(&t->eclk, 1, 64 * prescale);
+        case S5L8702_TIMER_TCON_CS(3):
+            trace_s5l8702_timer_clk_select("ECLK / 64");
             break;
         case S5L8702_TIMER_TCON_CS(4):
-        case S5L8702_TIMER_TCON_CS(5): // External clock 0
-            TIMER_LOG("%s: tcon->cs = external clock 0\n", __func__);
-            // clock_set_mul_div(&t->extclk0, 1, 1 * prescale);
+        case S5L8702_TIMER_TCON_CS(5):
+            trace_s5l8702_timer_clk_select("external clock 0");
             break;
         case S5L8702_TIMER_TCON_CS(6):
-        case S5L8702_TIMER_TCON_CS(7): // External clock 1
-            TIMER_LOG("%s: tcon->cs = external clock 1\n", __func__);
-            // clock_set_mul_div(&t->extclk1, 1, 1 * prescale);
+        case S5L8702_TIMER_TCON_CS(7):
+            trace_s5l8702_timer_clk_select("external clock 1");
             break;
-        default: // Unsupported
-            qemu_log_mask(LOG_GUEST_ERROR, "%s: invalid tcon->cs value %d\n", __func__, ((uint32_t) tcon & S5L8702_TIMER_TCON_CS_MASK) >> 8);
+        default:
+            trace_s5l8702_timer_clk_select_invalid(((uint32_t) tcon & S5L8702_TIMER_TCON_CS_MASK) >> 8);
         }
     } else {
         switch (tcon & S5L8702_TIMER_TCON_CS_MASK) {
-        case S5L8702_TIMER_TCON_CS(0): // PCLK / 2
-            TIMER_LOG("%s: tcon->cs = PCLK / 2\n", __func__);
-            // clock_set_mul_div(&t->pclk, 1, 2 * prescale);
+        case S5L8702_TIMER_TCON_CS(0):
+            trace_s5l8702_timer_clk_select("PCLK / 2");
             break;
-        case S5L8702_TIMER_TCON_CS(1): // PCLK / 4
-            TIMER_LOG("%s: tcon->cs = PCLK / 4\n", __func__);
-            // clock_set_mul_div(&t->pclk, 1, 4 * prescale);
+        case S5L8702_TIMER_TCON_CS(1):
+            trace_s5l8702_timer_clk_select("PCLK / 4");
             break;
-        case S5L8702_TIMER_TCON_CS(2): // PCLK / 16
-            TIMER_LOG("%s: tcon->cs = PCLK / 16\n", __func__);
-            // clock_set_mul_div(&t->pclk, 1, 16 * prescale);
+        case S5L8702_TIMER_TCON_CS(2):
+            trace_s5l8702_timer_clk_select("PCLK / 16");
             break;
-        case S5L8702_TIMER_TCON_CS(3): // PCLK / 64
-            TIMER_LOG("%s: tcon->cs = PCLK / 64\n", __func__);
-            // clock_set_mul_div(&t->pclk, 1, 64 * prescale);
+        case S5L8702_TIMER_TCON_CS(3):
+            trace_s5l8702_timer_clk_select("PCLK / 64");
             break;
         case S5L8702_TIMER_TCON_CS(4):
-        case S5L8702_TIMER_TCON_CS(5): // External clock 0
-            TIMER_LOG("%s: tcon->cs = external clock 0\n", __func__);
-            // clock_set_mul_div(&t->extclk0, 1, 1 * prescale);
+        case S5L8702_TIMER_TCON_CS(5):
+            trace_s5l8702_timer_clk_select("external clock 0");
             break;
         case S5L8702_TIMER_TCON_CS(6):
-        case S5L8702_TIMER_TCON_CS(7): // External clock 1
-            TIMER_LOG("%s: tcon->cs = external clock 1\n", __func__);
-            // clock_set_mul_div(&t->extclk1, 1, 1 * prescale);
+        case S5L8702_TIMER_TCON_CS(7):
+            trace_s5l8702_timer_clk_select("external clock 1");
             break;
-        default: // Unsupported
-            qemu_log_mask(LOG_GUEST_ERROR, "%s: invalid tcon->cs value %d\n", __func__, ((uint32_t) tcon & S5L8702_TIMER_TCON_CS_MASK) >> 8);
+        default:
+            trace_s5l8702_timer_clk_select_invalid(((uint32_t) tcon & S5L8702_TIMER_TCON_CS_MASK) >> 8);
         }
     }
+
+    /* If the timer is running, reschedule with the updated frequency */
+    if (t->running) s5l8702_timer_schedule(t);
 }
 
 static void s5l8702_timer_mode_select(S5L8702Timer *t, uint32_t tcon) {
     switch (tcon & S5L8702_TIMER_TCON_MODE_SEL_MASK) {
     case S5L8702_TIMER_TCON_MODE_SEL(0): // Interval mode
-        qemu_log_mask(LOG_UNIMP, "%s: unimplemented tcon->mode_sel = timer mode\n", __func__);
+        trace_s5l8702_timer_mode_select("interval");
         break;
     case S5L8702_TIMER_TCON_MODE_SEL(1): // PWM mode
-        qemu_log_mask(LOG_UNIMP, "%s: unimplemented tcon->mode_sel = counter mode\n", __func__);
+        trace_s5l8702_timer_mode_select("PWM");
         break;
     case S5L8702_TIMER_TCON_MODE_SEL(2): // One-shot mode
-        qemu_log_mask(LOG_UNIMP, "%s: unimplemented tcon->mode_sel = pulse width measurement mode\n", __func__);
+        trace_s5l8702_timer_mode_select("one-shot");
         break;
     case S5L8702_TIMER_TCON_MODE_SEL(3): // Capture mode
-        qemu_log_mask(LOG_UNIMP, "%s: unimplemented tcon->mode_sel = pulse period measurement mode\n", __func__);
+        trace_s5l8702_timer_mode_select("capture");
         break;
     }
 }
 
 static void s5l8702_timer_clear(S5L8702Timer *t) {
-    TIMER_LOG("%s\n", __func__);
-    qemu_log_mask(LOG_UNIMP, "%s: unimplemented\n", __func__);
+    trace_s5l8702_timer_clear();
+
+    /* Reset counter to 0 and update the timing reference */
+    t->tcnt = 0;
+    t->start_count = 0;
+    t->start_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+
+    if (t->running) s5l8702_timer_schedule(t);
 }
 
 static void s5l8702_timer_enable(S5L8702Timer *t, uint32_t tcmd) {
-    TIMER_LOG("%s\n", __func__);
-    if (tcmd & S5L8702_TIMER_TCMD_EN) {
-        qemu_log_mask(LOG_UNIMP, "%s: unimplemented tcmd->en\n", __func__);
-    } else {
-        qemu_log_mask(LOG_UNIMP, "%s: unimplemented tcmd->dis\n", __func__);
+    bool enable = !!(tcmd & S5L8702_TIMER_TCMD_EN);
+    trace_s5l8702_timer_enable(enable);
+
+    if (enable && !t->running) {
+        /* Start: resume counting from last known count */
+        t->running = true;
+        t->start_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+        t->start_count = t->tcnt;
+        s5l8702_timer_schedule(t);
+    } else if (!enable && t->running) {
+        /* Stop: snapshot current count and cancel the timer */
+        t->tcnt = s5l8702_timer_current_count(t);
+        t->running = false;
+        timer_del(&t->timer);
     }
 }
 
 static uint32_t s5l8702_timer_get_cnt(S5L8702Timer *t) {
-    // FIXME: This is just a hack to get the BL booting further
-    t->tcnt += 128;
+    if (t->running) t->tcnt = s5l8702_timer_current_count(t);
     return t->tcnt;
 }
 
-static uint64_t s5l8702_timer_read(void *opaque, hwaddr offset,
-                                      unsigned size)
-{
+static uint64_t s5l8702_timer_read(void *opaque, hwaddr offset, unsigned size) {
     S5L8702TimerCtrlState *s = S5L8702_TIMER(opaque);
     uint32_t tidx = offset / 0x20;
     if (tidx > S5L8702_TIMER_COUNT_16 + 1) tidx--; // 32-bit timers have a 0x20 offset
     S5L8702Timer *t = &s->timer[tidx];
     uint32_t r = 0;
+    bool implemented = true;
 
     switch (offset) {
     case S5L8702_TIMER_TCON_16(0):
@@ -184,7 +277,7 @@ static uint64_t s5l8702_timer_read(void *opaque, hwaddr offset,
     case S5L8702_TIMER_TCON_32(6):
     case S5L8702_TIMER_TCON_32(7): {
         r = t->tcon;
-        TIMER_LOG("s5l8702_timer_read: tcon[%d] = 0x%08x\n", tidx, r);
+        trace_s5l8702_timer_read("tcon", tidx, r);
         break;
     }
     case S5L8702_TIMER_TCMD_16(0):
@@ -196,7 +289,7 @@ static uint64_t s5l8702_timer_read(void *opaque, hwaddr offset,
     case S5L8702_TIMER_TCMD_32(6):
     case S5L8702_TIMER_TCMD_32(7): {
         r = t->tcmd;
-        TIMER_LOG("s5l8702_timer_read: tcmd[%d] = 0x%08x\n", tidx, r);
+        trace_s5l8702_timer_read("tcmd", tidx, r);
         break;
     }
     case S5L8702_TIMER_TDATA0_16(0):
@@ -208,7 +301,7 @@ static uint64_t s5l8702_timer_read(void *opaque, hwaddr offset,
     case S5L8702_TIMER_TDATA0_32(6):
     case S5L8702_TIMER_TDATA0_32(7): {
         r = t->tdata0;
-        TIMER_LOG("s5l8702_timer_read: tdata0[%d] = 0x%08x\n", tidx, r);
+        trace_s5l8702_timer_read("tdata0", tidx, r);
         break;
     }
     case S5L8702_TIMER_TDATA1_16(0):
@@ -220,7 +313,7 @@ static uint64_t s5l8702_timer_read(void *opaque, hwaddr offset,
     case S5L8702_TIMER_TDATA1_32(6):
     case S5L8702_TIMER_TDATA1_32(7): {
         r = t->tdata1;
-        TIMER_LOG("s5l8702_timer_read: tdata1[%d] = 0x%08x\n", tidx, r);
+        trace_s5l8702_timer_read("tdata1", tidx, r);
         break;
     }
     case S5L8702_TIMER_TPRE_16(0):
@@ -232,7 +325,7 @@ static uint64_t s5l8702_timer_read(void *opaque, hwaddr offset,
     case S5L8702_TIMER_TPRE_32(6):
     case S5L8702_TIMER_TPRE_32(7): {
         r = t->tpre;
-        TIMER_LOG("s5l8702_timer_read: tpre[%d] = 0x%08x\n", tidx, r);
+        trace_s5l8702_timer_read("tpre", tidx, r);
         break;
     }
     case S5L8702_TIMER_TCNT_16(0):
@@ -244,27 +337,25 @@ static uint64_t s5l8702_timer_read(void *opaque, hwaddr offset,
     case S5L8702_TIMER_TCNT_32(6):
     case S5L8702_TIMER_TCNT_32(7): {
         r = s5l8702_timer_get_cnt(t);
-        TIMER_LOG("s5l8702_timer_read: tcnt[%d] = 0x%08x\n", tidx, r);
+        trace_s5l8702_timer_read("tcnt", tidx, r);
         break;
     }
     case S5L8702_TIMER_TSTAT: {
         r = s->tstat;
-        TIMER_LOG("s5l8702_timer_read: tstat = 0x%08x\n", r);
+        trace_s5l8702_timer_read("tstat", 0, r);
         break;
     }
     default:
-        qemu_log_mask(LOG_UNIMP, "%s: unimplemented read offset 0x%04x\n",
-                      __func__, (uint32_t) offset);
+        trace_s5l8702_timer_read_unimp((uint32_t) offset);
+        implemented = false;
     }
 
-    s5l8702_timer_update(t);
+    if(implemented) s5l8702_timer_update(t);
 
     return r;
 }
 
-static void s5l8702_timer_write(void *opaque, hwaddr offset,
-                                   uint64_t val, unsigned size)
-{
+static void s5l8702_timer_write(void *opaque, hwaddr offset, uint64_t val, unsigned size) {
     S5L8702TimerCtrlState *s = S5L8702_TIMER(opaque);
     uint32_t tidx = offset / 0x20;
     if (tidx > S5L8702_TIMER_COUNT_16 + 1) tidx--; // 32-bit timers have a 0x20 offset
@@ -279,7 +370,7 @@ static void s5l8702_timer_write(void *opaque, hwaddr offset,
     case S5L8702_TIMER_TCON_32(5):
     case S5L8702_TIMER_TCON_32(6):
     case S5L8702_TIMER_TCON_32(7): {
-        TIMER_LOG("s5l8702_timer_write: tcon[%d] = 0x%08x\n", tidx, (uint32_t) val);
+        trace_s5l8702_timer_write("tcon", tidx, (uint32_t) val);
 
         // TCON_OUT is read-only
         val &= ~S5L8702_TIMER_TCON_OUT;
@@ -304,49 +395,8 @@ static void s5l8702_timer_write(void *opaque, hwaddr offset,
             val |= t->tcon & S5L8702_TIMER_TCON_INT0;
         }
 
-        if ((val & S5L8702_TIMER_TCON_OVF_EN) != (t->tcon & S5L8702_TIMER_TCON_OVF_EN)) {
-            if (val & S5L8702_TIMER_TCON_OVF_EN) {
-                qemu_log_mask(LOG_UNIMP, "%s: unimplemented overflow interrupt enable\n", __func__);
-            } else {
-                qemu_log_mask(LOG_UNIMP, "%s: unimplemented overflow interrupt disable\n", __func__);
-            }
-        }
-
-        if ((val & S5L8702_TIMER_TCON_INT1_EN) != (t->tcon & S5L8702_TIMER_TCON_INT1_EN)) {
-            if (val & S5L8702_TIMER_TCON_INT1_EN) {
-                qemu_log_mask(LOG_UNIMP, "%s: unimplemented interrupt 1 enable\n", __func__);
-            } else {
-                qemu_log_mask(LOG_UNIMP, "%s: unimplemented interrupt 1 disable\n", __func__);
-            }
-        }
-
-        if ((val & S5L8702_TIMER_TCON_INT0_EN) != (t->tcon & S5L8702_TIMER_TCON_INT0_EN)) {
-            if (val & S5L8702_TIMER_TCON_INT0_EN) {
-                qemu_log_mask(LOG_UNIMP, "%s: unimplemented interrupt 0 enable\n", __func__);
-            } else {
-                qemu_log_mask(LOG_UNIMP, "%s: unimplemented interrupt 0 disable\n", __func__);
-            }
-        }
-
-        if ((val & S5L8702_TIMER_TCON_START) != (t->tcon & S5L8702_TIMER_TCON_START)) {
-            qemu_log_mask(LOG_UNIMP, "%s: unimplemented tcon->start\n", __func__);
-        }
-
-        if ((val & S5L8702_TIMER_TCON_CS_MASK) != (t->tcon & S5L8702_TIMER_TCON_CS_MASK)) {
-            s5l8702_timer_clk_select(t, val, t->tpre);
-        }
-
-        if ((val & S5L8702_TIMER_TCON_CAP_MODE) != (t->tcon & S5L8702_TIMER_TCON_CAP_MODE)) {
-            qemu_log_mask(LOG_UNIMP, "%s: unimplemented tcon->cap_mode\n", __func__);
-        }
-
-        if ((val & S5L8702_TIMER_TCON_ECLK) != (t->tcon & S5L8702_TIMER_TCON_ECLK)) {
-            s5l8702_timer_clk_select(t, val, t->tpre);
-        }
-
-        if ((val & S5L8702_TIMER_TCON_MODE_SEL_MASK) != (t->tcon & S5L8702_TIMER_TCON_MODE_SEL_MASK)) {
-            s5l8702_timer_mode_select(t, val);
-        }
+        s5l8702_timer_clk_select(t, val, t->tpre);
+        s5l8702_timer_mode_select(t, val);
 
         t->tcon = (uint32_t) val;
         break;
@@ -364,9 +414,7 @@ static void s5l8702_timer_write(void *opaque, hwaddr offset,
             s5l8702_timer_clear(t);
         }
 
-        if ((val & S5L8702_TIMER_TCMD_EN) != (t->tcmd & S5L8702_TIMER_TCMD_EN)) {
-            s5l8702_timer_enable(t, val);
-        }
+        s5l8702_timer_enable(t, val);
 
         t->tcmd = (uint32_t) val;
         break;
@@ -379,7 +427,7 @@ static void s5l8702_timer_write(void *opaque, hwaddr offset,
     case S5L8702_TIMER_TDATA0_32(5):
     case S5L8702_TIMER_TDATA0_32(6):
     case S5L8702_TIMER_TDATA0_32(7): {
-        TIMER_LOG("s5l8702_timer_write: tdata0[%d] = 0x%08x\n", tidx, (uint32_t) val);
+        trace_s5l8702_timer_write("tdata0", tidx, (uint32_t) val);
         t->tdata0 = (uint32_t) val;
         break;
     }
@@ -391,7 +439,7 @@ static void s5l8702_timer_write(void *opaque, hwaddr offset,
     case S5L8702_TIMER_TDATA1_32(5):
     case S5L8702_TIMER_TDATA1_32(6):
     case S5L8702_TIMER_TDATA1_32(7): {
-        TIMER_LOG("s5l8702_timer_write: tdata1[%d] = 0x%08x\n", tidx, (uint32_t) val);
+        trace_s5l8702_timer_write("tdata1", tidx, (uint32_t) val);
         t->tdata1 = (uint32_t) val;
         break;
     }
@@ -403,7 +451,7 @@ static void s5l8702_timer_write(void *opaque, hwaddr offset,
     case S5L8702_TIMER_TPRE_32(5):
     case S5L8702_TIMER_TPRE_32(6):
     case S5L8702_TIMER_TPRE_32(7): {
-        TIMER_LOG("s5l8702_timer_write: tpre[%d] = 0x%08x\n", tidx, (uint32_t) val);
+        trace_s5l8702_timer_write("tpre", tidx, (uint32_t) val);
         s5l8702_timer_clk_select(t, t->tcon, (uint32_t) val);
         t->tpre = (uint32_t) val;
         break;
@@ -416,17 +464,21 @@ static void s5l8702_timer_write(void *opaque, hwaddr offset,
     case S5L8702_TIMER_TCNT_32(5):
     case S5L8702_TIMER_TCNT_32(6):
     case S5L8702_TIMER_TCNT_32(7): {
-        qemu_log_mask(LOG_GUEST_ERROR, "%s: write to read-only register tcnt[%d]\n", __func__, tidx);
+        trace_s5l8702_timer_write_tcnt_ro(tidx);
         break;
     }
     case S5L8702_TIMER_TSTAT: {
-        TIMER_LOG("s5l8702_timer_write: tstat = 0x%08x\n", (uint32_t) val);
-        s->tstat = (uint32_t) val;
-        break;
+        trace_s5l8702_timer_write("tstat", 0, (uint32_t) val);
+        /* Write-1-to-clear: bits set in val are cleared in tstat */
+        s->tstat &= ~(uint32_t)val;
+        /* Re-evaluate IRQs for 32-bit timers whose status bit was cleared */
+        for (uint32_t i = S5L8702_TIMER_COUNT_16; i < S5L8702_TIMER_COUNT; i++) {
+            s5l8702_timer_update(&s->timer[i]);
+        }
+        return; // skip the per-timer update at the bottom
     }
     default:
-        qemu_log_mask(LOG_UNIMP, "%s: unimplemented write offset 0x%04x\n",
-                      __func__, (uint32_t) offset);
+        trace_s5l8702_timer_write_unimp((uint32_t) offset);
     }
 
     s5l8702_timer_update(t);
@@ -438,69 +490,136 @@ static const MemoryRegionOps s5l8702_timer_ops = {
     .endianness = DEVICE_NATIVE_ENDIAN,
 };
 
-static void s5l8702_timer_realize(DeviceState *dev, Error **errp)
-{
-    S5L8702TimerCtrlState *s = S5L8702_TIMER(dev);
-
-    TIMER_LOG("s5l8702_timer_realize\n");
-
-    for (uint32_t i = 0; i < ARRAY_SIZE(s->timer); i++) {
-        S5L8702Timer *t = &s->timer[i];
-        
-        
-    }
+static void s5l8702_timer_realize(DeviceState *dev, Error **errp) {
+    trace_s5l8702_timer_realize();
 }
 
-static void s5l8702_timer_reset(DeviceState *dev)
-{
+static void s5l8702_timer_reset(DeviceState *dev) {
     S5L8702TimerCtrlState *s = S5L8702_TIMER(dev);
 
-    TIMER_LOG("s5l8702_timer_reset\n");
+    trace_s5l8702_timer_reset();
 
-    /* Reset registers */
     s->tstat = 0;
 
     for (uint32_t i = 0; i < ARRAY_SIZE(s->timer); i++) {
         S5L8702Timer *t = &s->timer[i];
         timer_del(&t->timer);
+        t->running = false;
         t->tcon = 0;
         t->tcmd = 0;
         t->tdata0 = 0;
         t->tdata1 = 0;
         t->tpre = 0;
         t->tcnt = 0;
+        t->start_ns = 0;
+        t->start_count = 0;
+        t->sched_count = 0;
+        t->sched_events = 0;
     }
 }
 
-static void s5l8702_timer_tick(void *opaque)
-{
+static void s5l8702_timer_tick(void *opaque) {
     S5L8702Timer *t = opaque;
 
-    TIMER_LOG("s5l8702_timer_tick\n");
+    trace_s5l8702_timer_tick();
+
+    /* Advance the timing reference to the exact scheduled count */
+    t->start_count = t->sched_count;
+    t->start_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    t->tcnt = t->sched_count;
+
+    /* Set interrupt flags for all events that fired this tick */
+    if (t->sched_events & SCHED_EVT_INT0) {
+        t->tcon |= S5L8702_TIMER_TCON_INT0;
+    }
+    if (t->sched_events & SCHED_EVT_INT1) {
+        t->tcon |= S5L8702_TIMER_TCON_INT1;
+    }
+    if (t->sched_events & SCHED_EVT_OVF) {
+        t->tcon |= S5L8702_TIMER_TCON_OVF;
+
+        if ((t->tcon & S5L8702_TIMER_TCON_MODE_SEL_MASK) == S5L8702_TIMER_TCON_MODE_SEL(2)) {
+            t->running = false;
+        }
+    }
+
+    /* Update TSTAT for 32-bit timers (only set on fire, not on every update) */
+    if (t->sched_events) s5l8702_timer_set_tstat(t);
+
+    /* Raise / lower IRQ based on new flag state */
+    s5l8702_timer_update(t);
+
+    /* Reschedule for the next event if still running */
+    if (t->running) s5l8702_timer_schedule(t);
 }
 
-static void s5l8702_timer_init(Object *obj)
-{
-    S5L8702TimerCtrlState *s = S5L8702_TIMER(obj);
+/*
+ * Find the nearest upcoming event (INT0 compare, INT1 compare, or overflow),
+ * update the timing reference, and arm the QEMUTimer.
+ */
+static void s5l8702_timer_schedule(S5L8702Timer *t) {
+    if (!t->running) return;
 
-    TIMER_LOG("s5l8702_timer_init\n");
+    uint64_t freq = s5l8702_timer_get_freq(t);
+    if (freq == 0) {
+        qemu_log_mask(LOG_GUEST_ERROR, "s5l8702-timer: timer enabled with zero frequency\n");
+        return;
+    }
+
+    uint64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    uint32_t cur = s5l8702_timer_current_count(t);
+    uint32_t max_val = s5l8702_timer_max_val(t);
+
+    /* Re-anchor the start reference to avoid cumulative drift */
+    t->start_ns = now;
+    t->start_count = cur;
+
+    /* Distance (in ticks) from cur to each event */
+    uint64_t dist_int0 = s5l8702_dist_to_count(cur, t->tdata0, max_val);
+    uint64_t dist_int1 = s5l8702_dist_to_count(cur, t->tdata1, max_val);
+    uint64_t dist_ovf  = (uint64_t)(max_val - cur) + 1; /* always >= 1 */
+
+    /* Schedule for the nearest event (ties fire simultaneously) */
+    uint64_t min_dist = dist_ovf;
+    if (dist_int0 < min_dist) { min_dist = dist_int0; }
+    if (dist_int1 < min_dist) { min_dist = dist_int1; }
+
+    /* Record which events fire at min_dist */
+    t->sched_events = 0;
+    if (dist_int0 == min_dist) { t->sched_events |= SCHED_EVT_INT0; }
+    if (dist_int1 == min_dist) { t->sched_events |= SCHED_EVT_INT1; }
+    if (dist_ovf  == min_dist) { t->sched_events |= SCHED_EVT_OVF;  }
+
+    /* Record the counter value at the next fire point */
+    t->sched_count = (uint32_t)((cur + min_dist) & (uint64_t)max_val);
+
+    uint64_t ns = muldiv64(min_dist, NANOSECONDS_PER_SECOND, freq);
+    timer_mod(&t->timer, now + ns);
+}
+
+static void s5l8702_timer_init(Object *obj) {
+    S5L8702TimerCtrlState *s = S5L8702_TIMER(obj);
+    SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
+
+    trace_s5l8702_timer_init();
+
+    /* Two sysbus IRQ lines: index 0 = 16-bit group, index 1 = 32-bit group */
+    sysbus_init_irq(sbd, &s->irq_16bit);
+    sysbus_init_irq(sbd, &s->irq_32bit);
 
     /* Memory mapping */
     memory_region_init_io(&s->iomem, OBJECT(s), &s5l8702_timer_ops, s, TYPE_S5L8702_TIMER, S5L8702_TIMER_SIZE);
-    sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
+    sysbus_init_mmio(sbd, &s->iomem);
 
     for (uint32_t i = 0; i < ARRAY_SIZE(s->timer); i++) {
         S5L8702Timer *t = &s->timer[i];
         t->ctrl = s;
-        t->type = i < 5 ? S5L8702_TIMER_TYPE_16 : S5L8702_TIMER_TYPE_32;
+        t->type = i < S5L8702_TIMER_COUNT_16 ? S5L8702_TIMER_TYPE_16 : S5L8702_TIMER_TYPE_32;
         timer_init_ns(&t->timer, QEMU_CLOCK_VIRTUAL, s5l8702_timer_tick, t);
-        // TODO: irq
     }
 }
 
-static void s5l8702_timer_class_init(ObjectClass *klass, void *data)
-{
-    ResettableClass *rc = RESETTABLE_CLASS(klass);
+static void s5l8702_timer_class_init(ObjectClass *klass, void *data) {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = s5l8702_timer_realize;

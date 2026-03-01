@@ -51,8 +51,10 @@ static void s5l8702_init(Object *obj) {
     /* EXTCLK */
     object_initialize_child(obj, "extclk0", &s->extclk0, TYPE_CLOCK);
     clock_setup_canonical_path(&s->extclk0);
+    clock_set_hz(&s->extclk0, 12000000);
     object_initialize_child(obj, "extclk1", &s->extclk1, TYPE_CLOCK);
     clock_setup_canonical_path(&s->extclk1);
+    clock_set_hz(&s->extclk1, 12000000);
     
     object_initialize_child(obj, "clk", &s->clk, TYPE_S5L8702_CLK);
     object_initialize_child(obj, "aes", &s->aes, TYPE_S5L8702_AES);
@@ -152,6 +154,8 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
     s->timer.extclk1 = &s->extclk1;
     sysbus_realize(SYS_BUS_DEVICE(&s->timer), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->timer), 0, S5L8702_TIMER_BASE);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->timer), 0, qdev_get_gpio_in(glue, S5L8702_TIMER_IRQ_16BIT));
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->timer), 1, qdev_get_gpio_in(glue, S5L8702_TIMER_IRQ_32BIT));
 
     /* LCD */
     s->lcd.sysmem = get_system_memory();

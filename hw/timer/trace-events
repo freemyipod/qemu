@@ -99,3 +99,19 @@ sifive_pwm_write(uint64_t data, uint64_t offset) "Write 0x%" PRIx64 " at address
 sh_timer_start_stop(int enable, int current) "%d (%d)"
 sh_timer_read(uint64_t offset) "tmu012_read 0x%" PRIx64
 sh_timer_write(uint64_t offset, uint64_t value) "tmu012_write 0x%" PRIx64 " 0x%08" PRIx64
+
+# s5l8702-timer.c
+s5l8702_timer_init(void) "init"
+s5l8702_timer_realize(void) "realize"
+s5l8702_timer_reset(void) "reset"
+s5l8702_timer_tick(void) "tick"
+s5l8702_timer_clk_select(const char *src) "clk src: %s"
+s5l8702_timer_clk_select_invalid(int cs) "invalid tcon->cs value %d"
+s5l8702_timer_mode_select(const char *mode) "mode_sel = %s"
+s5l8702_timer_clear(void) "clear"
+s5l8702_timer_enable(int en) "en: %d"
+s5l8702_timer_read_unimp(uint32_t offset) "unimplemented read offset 0x%04x"
+s5l8702_timer_write_tcnt_ro(int tidx) "write to read-only register tcnt[%d]"
+s5l8702_timer_write_unimp(uint32_t offset) "unimplemented write offset 0x%04x"
+s5l8702_timer_read(const char *reg, int tidx, uint32_t val) "%s[%d] = 0x%08x"
+s5l8702_timer_write(const char *reg, int tidx, uint32_t val) "%s[%d] = 0x%08x"

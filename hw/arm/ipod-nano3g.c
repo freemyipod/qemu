@@ -193,7 +193,7 @@ static void ipod_nano3g_machine_init(MachineState *machine)
 
     // HACK to get into diagnostic mode
     s->soc.gpio.clickwheel_select_pressed = 1;
-    s->soc.gpio.clickwheel_prev_pressed = 1;
+    s->soc.gpio.clickwheel_menu_pressed = 1;
 }
 
 static void ipod_nano3g_class_init(ObjectClass *oc, void *data)
