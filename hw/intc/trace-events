@@ -302,6 +302,13 @@ loongarch_pch_pic_high_writew(unsigned size, uint64_t addr, uint64_t val) "size:
 loongarch_pch_pic_readb(unsigned size, uint64_t addr, uint64_t val) "size: %u addr: 0x%"PRIx64 "val: 0x%" PRIx64
 loongarch_pch_pic_writeb(unsigned size, uint64_t addr, uint64_t val) "size: %u addr: 0x%"PRIx64 "val: 0x%" PRIx64
 
+# pl192.c
+pl192_read(uint64_t offset, uint64_t value) "offset 0x%"PRIx64" value 0x%"PRIx64
+pl192_write(uint64_t offset, uint64_t value) "offset 0x%"PRIx64" value 0x%"PRIx64
+pl192_irq_handler(int irq, int level) "irq %d level %d"
+pl192_irq_ack(uint32_t result) "result 0x%08"PRIx32
+pl192_irq_fin(void) ""
+
 # loongarch_pch_msi.c
 loongarch_msi_set_irq(int irq_num) "set msi irq %d"
 

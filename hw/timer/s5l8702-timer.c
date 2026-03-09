@@ -112,8 +112,6 @@ static uint64_t s5l8702_dist_to_count(uint32_t cur, uint32_t target, uint32_t ma
 
 static void s5l8702_timer_update(S5L8702Timer *t) {
     S5L8702TimerCtrlState *s = t->ctrl;
-
-    /* Recompute the shared IRQ line for the group this timer belongs to */
     bool is_32bit = (t->type == S5L8702_TIMER_TYPE_32);
     uint32_t start = is_32bit ? S5L8702_TIMER_COUNT_16 : 0;
     uint32_t end = is_32bit ? S5L8702_TIMER_COUNT : S5L8702_TIMER_COUNT_16;
@@ -121,12 +119,22 @@ static void s5l8702_timer_update(S5L8702Timer *t) {
     bool irq = false;
     for (uint32_t i = start; i < end; i++) {
         S5L8702Timer *ti = &s->timer[i];
-        if (((ti->tcon & S5L8702_TIMER_TCON_OVF)  && (ti->tcon & S5L8702_TIMER_TCON_OVF_EN)) ||
-            ((ti->tcon & S5L8702_TIMER_TCON_INT1) && (ti->tcon & S5L8702_TIMER_TCON_INT1_EN)) ||
-            ((ti->tcon & S5L8702_TIMER_TCON_INT0) && (ti->tcon & S5L8702_TIMER_TCON_INT0_EN))) {
-            irq = true;
-            break;
+        
+        if (is_32bit) {
+            /* 32-bit timers assert based on TSTAT bits, provided they are enabled in TCON */
+            uint32_t shift = (i == 4) ? 8 : (i == 5) ? 16 : (i == 6) ? 24 : 0;
+            if ((s->tstat & (4 << shift)) && (ti->tcon & S5L8702_TIMER_TCON_OVF_EN)) irq = true;
+            if ((s->tstat & (1 << shift)) && (ti->tcon & S5L8702_TIMER_TCON_INT0_EN)) irq = true;
+            if ((s->tstat & (2 << shift)) && (ti->tcon & S5L8702_TIMER_TCON_INT1_EN)) irq = true;
+        } else {
+            /* 16-bit timers assert directly from TCON */
+            if (((ti->tcon & S5L8702_TIMER_TCON_OVF)  && (ti->tcon & S5L8702_TIMER_TCON_OVF_EN)) ||
+                ((ti->tcon & S5L8702_TIMER_TCON_INT1) && (ti->tcon & S5L8702_TIMER_TCON_INT1_EN)) ||
+                ((ti->tcon & S5L8702_TIMER_TCON_INT0) && (ti->tcon & S5L8702_TIMER_TCON_INT0_EN))) {
+                irq = true;
+            }
         }
+        if (irq) break;
     }
 
     qemu_set_irq(is_32bit ? s->irq_32bit : s->irq_16bit, irq);
@@ -137,17 +145,16 @@ static void s5l8702_timer_update(S5L8702Timer *t) {
  * TSTAT bits are only set here (on fire), and cleared by the guest.
  */
 static void s5l8702_timer_set_tstat(S5L8702Timer *t) {
-    static const uint32_t tstat_bits[S5L8702_TIMER_COUNT] = {
-        [4] = S5L8702_TIMER_TSTAT_INTE,
-        [5] = S5L8702_TIMER_TSTAT_INTF,
-        [6] = S5L8702_TIMER_TSTAT_INTG,
-        [7] = S5L8702_TIMER_TSTAT_INTH,
-    };
-
     S5L8702TimerCtrlState *s = t->ctrl;
     uint32_t idx = (uint32_t)(t - &s->timer[0]);
+    
     if (idx >= S5L8702_TIMER_COUNT_16 && idx < S5L8702_TIMER_COUNT) {
-        s->tstat |= tstat_bits[idx];
+        /* Map timer 4->shift 8, 5->16, 6->24, 7->0 */
+        uint32_t shift = (idx == 4) ? 8 : (idx == 5) ? 16 : (idx == 6) ? 24 : 0;
+        
+        if (t->sched_events & SCHED_EVT_INT0) s->tstat |= (1 << shift);
+        if (t->sched_events & SCHED_EVT_INT1) s->tstat |= (2 << shift);
+        if (t->sched_events & SCHED_EVT_OVF)  s->tstat |= (4 << shift);
     }
 }
 
@@ -371,34 +378,43 @@ static void s5l8702_timer_write(void *opaque, hwaddr offset, uint64_t val, unsig
     case S5L8702_TIMER_TCON_32(6):
     case S5L8702_TIMER_TCON_32(7): {
         trace_s5l8702_timer_write("tcon", tidx, (uint32_t) val);
-
-        // TCON_OUT is read-only
-        val &= ~S5L8702_TIMER_TCON_OUT;
-        val |= t->tcon & S5L8702_TIMER_TCON_OUT;
-
-        // TCON_OVF, TCON_INT1, TCON_INT0 are write 1 to clear
-        if (val & S5L8702_TIMER_TCON_OVF) {
-            val &= ~S5L8702_TIMER_TCON_OVF;
-        } else {
-            val |= t->tcon & S5L8702_TIMER_TCON_OVF;
+        if (!t->running) {
+            trace_s5l8702_timer_clear(); // Log that we are doing this.
+            t->tcnt = 0;
+            t->start_count = 0;
+            t->start_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
         }
 
-        if (val & S5L8702_TIMER_TCON_INT1) {
-            val &= ~S5L8702_TIMER_TCON_INT1;
-        } else {
-            val |= t->tcon & S5L8702_TIMER_TCON_INT1;
+        /*
+         * Correctly model the mixed-mode register:
+         * - Status flags (OVF, INT1, INT0) are Write-1-to-Clear (W1C).
+         * - Other bits (enables, mode, etc.) are Read/Write (R/W).
+         * - The output bit is Read-Only (R/O).
+         */
+        uint32_t w1c_mask = S5L8702_TIMER_TCON_OVF |
+                            S5L8702_TIMER_TCON_INT1 |
+                            S5L8702_TIMER_TCON_INT0;
+
+        uint32_t rw_mask = ~w1c_mask & ~S5L8702_TIMER_TCON_OUT;
+
+        /* Start with the current register state */
+        uint32_t new_tcon = t->tcon;
+
+        /* Apply the R/W bits from the guest's write */
+        new_tcon &= ~rw_mask;      /* Clear the R/W bits in our state */
+        new_tcon |= val & rw_mask; /* Apply the new R/W bits from val */
+
+        /* Clear the status bits that the guest wrote a '1' to */
+        new_tcon &= ~(val & w1c_mask);
+
+        /* Check if clock source or mode changed to reschedule */
+        if ((new_tcon & S5L8702_TIMER_TCON_CS_MASK) != (t->tcon & S5L8702_TIMER_TCON_CS_MASK) ||
+            (new_tcon & S5L8702_TIMER_TCON_MODE_SEL_MASK) != (t->tcon & S5L8702_TIMER_TCON_MODE_SEL_MASK)) {
+            s5l8702_timer_clk_select(t, new_tcon, t->tpre);
+            s5l8702_timer_mode_select(t, new_tcon);
         }
 
-        if (val & S5L8702_TIMER_TCON_INT0) {
-            val &= ~S5L8702_TIMER_TCON_INT0;
-        } else {
-            val |= t->tcon & S5L8702_TIMER_TCON_INT0;
-        }
-
-        s5l8702_timer_clk_select(t, val, t->tpre);
-        s5l8702_timer_mode_select(t, val);
-
-        t->tcon = (uint32_t) val;
+        t->tcon = new_tcon;
         break;
     }
     case S5L8702_TIMER_TCMD_16(0):
@@ -469,13 +485,19 @@ static void s5l8702_timer_write(void *opaque, hwaddr offset, uint64_t val, unsig
     }
     case S5L8702_TIMER_TSTAT: {
         trace_s5l8702_timer_write("tstat", 0, (uint32_t) val);
-        /* Write-1-to-clear: bits set in val are cleared in tstat */
+        /* Write-1-to-clear */
         s->tstat &= ~(uint32_t)val;
-        /* Re-evaluate IRQs for 32-bit timers whose status bit was cleared */
+        
+        /* FIX: Sync TCON flags for 32-bit timers to match TSTAT clears */
         for (uint32_t i = S5L8702_TIMER_COUNT_16; i < S5L8702_TIMER_COUNT; i++) {
+            uint32_t shift = (i == 4) ? 8 : (i == 5) ? 16 : (i == 6) ? 24 : 0;
+            if (!(s->tstat & (4 << shift))) s->timer[i].tcon &= ~S5L8702_TIMER_TCON_OVF;
+            if (!(s->tstat & (1 << shift))) s->timer[i].tcon &= ~S5L8702_TIMER_TCON_INT0;
+            if (!(s->tstat & (2 << shift))) s->timer[i].tcon &= ~S5L8702_TIMER_TCON_INT1;
+            
             s5l8702_timer_update(&s->timer[i]);
         }
-        return; // skip the per-timer update at the bottom
+        return; 
     }
     default:
         trace_s5l8702_timer_write_unimp((uint32_t) offset);

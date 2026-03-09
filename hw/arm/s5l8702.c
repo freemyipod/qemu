@@ -46,7 +46,7 @@ static void s5l8702_init(Object *obj) {
     /* ECLK */
     object_initialize_child(obj, "eclk", &s->eclk, TYPE_CLOCK);
     clock_setup_canonical_path(&s->eclk);
-    clock_set_hz(&s->eclk, 12000000); // 12 MHz
+    clock_set_hz(&s->eclk, 6000000); // 6 MHz
 
     /* EXTCLK */
     object_initialize_child(obj, "extclk0", &s->extclk0, TYPE_CLOCK);

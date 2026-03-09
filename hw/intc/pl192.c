@@ -11,6 +11,7 @@
 #include "hw/hw.h"
 #include "qapi/error.h"
 #include "hw/intc/pl192.h"
+#include "trace.h"
 
 extern CPUState *getMainCpuEnv(void);
 
@@ -175,6 +176,8 @@ static uint32_t pl192_irq_ack(PL192State *s)
     int is_daisy = (s->current_highest == PL192_DAISY_IRQ);
     uint32_t res = s->address;
 
+    trace_pl192_irq_ack(res);
+
     s->current = s->current_highest;
     pl192_mask_priority(s);
     if (is_daisy) {
@@ -183,11 +186,12 @@ static uint32_t pl192_irq_ack(PL192State *s)
     pl192_update(s);
     return res;
 }
-
 /* IRQ was processed by CPU. Update controller state accrodingly */
 static void pl192_irq_fin(PL192State *s)
 {
     int is_daisy = (s->current == PL192_DAISY_IRQ);
+
+    trace_pl192_irq_fin();
 
     pl192_unmask_priority(s);
     if (is_daisy) {
@@ -207,6 +211,7 @@ static void pl192_irq_fin(PL192State *s)
 static uint64_t pl192_read(void *opaque, hwaddr offset, unsigned size)
 {
     PL192State *s = (PL192State *) opaque;
+    uint64_t ret;
 
     if (offset & 3) {
         fprintf(stderr, "pl192: bad read offset (1) " TARGET_FMT_plx "\n", offset);
@@ -215,56 +220,81 @@ static uint64_t pl192_read(void *opaque, hwaddr offset, unsigned size)
 
     if (offset >= 0xfe0 && offset < 0x1000) {
         unsigned char pl192_id[] = { 0x92, 0x11, 0x04, 0x00, 0x0D, 0xF0, 0x05, 0xB1 };
-        return pl192_id[(offset - 0xfe0) >> 2];
+        ret = pl192_id[(offset - 0xfe0) >> 2];
+        trace_pl192_read(offset, ret);
+        return ret;
     }
     if (offset >= 0x100 && offset < 0x180) {
-        return s->vect_addr[(offset - 0x100) >> 2];
+        ret = s->vect_addr[(offset - 0x100) >> 2];
+        trace_pl192_read(offset, ret);
+        return ret;
     }
     if (offset >= 0x200 && offset < 0x280) {
-        return s->vect_priority[(offset - 0x200) >> 2];
+        ret = s->vect_priority[(offset - 0x200) >> 2];
+        trace_pl192_read(offset, ret);
+        return ret;
     }
 
     switch (offset) {
         case PL192_IRQSTATUS:
-			//fprintf(stderr, "%s: irqstatus 0x%08x\n", __FUNCTION__, s->irq_status);
-            return s->irq_status;
+            ret = s->irq_status;
+            break;
         case PL192_FIQSTATUS:
-            return s->fiq_status;
+            ret = s->fiq_status;
+            break;
         case PL192_RAWINTR:
-            return s->rawintr;
+            ret = s->rawintr;
+            break;
         case PL192_INTSELECT:
-            return s->intselect;
+            ret = s->intselect;
+            break;
         case PL192_INTENABLE:
-            return s->intenable;
+            ret = s->intenable;
+            break;
         case PL192_SOFTINT:
-            return s->softint;
+            ret = s->softint;
+            break;
         case PL192_PROTECTION:
-            return s->protection;
+            ret = s->protection;
+            break;
         case PL192_SWPRIORITYMASK:
-            return s->sw_priority_mask;
+            ret = s->sw_priority_mask;
+            break;
         case PL192_PRIORITYDAISY:
-            return s->daisy_priority;
+            ret = s->daisy_priority;
+            break;
         case PL192_INTENCLEAR:
-			return 0;
+            ret = 0;
+            break;
         case PL192_SOFTINTCLEAR:
             fprintf(stderr, "pl192: attempt to read write-only register (offset = "
                      TARGET_FMT_plx ")\n", offset);
+            /* fall through */
         case PL192_VECTADDR:
-            return pl192_irq_ack(s);
+            ret = pl192_irq_ack(s);
+            trace_pl192_read(offset, ret);
+            return ret;
         /* Workaround for kernel code using PL190 */
         case PL190_ITCR:
         case PL190_VECTADDR:
         case PL190_DEFVECTADDR:
-            return 0;
+            ret = 0;
+            break;
         default:
             fprintf(stderr, "pl192: bad read offset (2) " TARGET_FMT_plx "\n", offset);
-            return 0;
+            ret = 0;
+            break;
     }
+
+    trace_pl192_read(offset, ret);
+    return ret;
 }
 
 static void pl192_write(void *opaque, hwaddr offset, uint64_t value, unsigned size)
 {
     PL192State *s = (PL192State *) opaque;
+
+    trace_pl192_write(offset, value);
 
     if (offset & 3) {
         hw_error("pl192: bad write offset (1) " TARGET_FMT_plx "\n", offset);
@@ -321,12 +351,13 @@ static void pl192_write(void *opaque, hwaddr offset, uint64_t value, unsigned si
             s->daisy_priority = value & 0xf;
             break;
         case PL192_VECTADDR:
+        case PL190_VECTADDR: // Handle both PL192 and PL190 EOI writes
             pl192_irq_fin(s);
             return;
+
         case PL190_ITCR:
-        case PL190_VECTADDR:
         case PL190_DEFVECTADDR:
-            /* NB: This thing is not present here, but linux wants to write it */
+            /* NB: These things are not present here, but linux wants to write it */
             /* Ignore written value */
             return;
         default:
@@ -340,6 +371,8 @@ static void pl192_write(void *opaque, hwaddr offset, uint64_t value, unsigned si
 static void pl192_irq_handler(void *opaque, int irq, int level)
 {
     PL192State *s = (PL192State *) opaque;
+
+    trace_pl192_irq_handler(irq, level);
 
     if (level) {
         s->rawintr |= 1 << irq;
