@@ -82,6 +82,7 @@ static void s5l8702_init(Object *obj) {
     object_initialize_child(obj, "chipid", &s->chipid, TYPE_S5L8702_CHIPID);
     object_initialize_child(obj, "nand", &s->nand, TYPE_S5L8702_NAND);
     object_initialize_child(obj, "nand_ecc", &s->nand_ecc, TYPE_S5L8702_NAND_ECC);
+    object_initialize_child(obj, "miu", &s->miu, TYPE_S5L8702_MIU);
 }
 
 static void s5l8702_realize(DeviceState *dev, Error **errp) {
@@ -225,7 +226,10 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
 
     create_unimplemented_device("unimplemented-mem", 0x0, 0xFFFFFFFF);
     create_unimplemented_device("wdt", 0x3c800000, 0x100000);
-    create_unimplemented_device("miu", 0x38100000, 0x100000);
+    /* MIU */
+    sysbus_realize(SYS_BUS_DEVICE(&s->miu), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->miu), 0, S5L8702_MIU_BASE);
+
     // 👇🏻 https://github.com/Rockbox/rockbox/blob/ed369e1d475658eccb5eb2221d757e7d66796e90/firmware/target/arm/s5l8702/clocking-s5l8702.h#L216
     create_unimplemented_device("sm1_div", 0x38501000, 0x04);
     create_unimplemented_device("phy", 0x3c400000, 0x100000);

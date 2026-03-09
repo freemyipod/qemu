@@ -305,6 +305,12 @@ s5l8702_jpeg_init(void) "init"
 s5l8702_sha_reset(void) "reset"
 s5l8702_sha_init(void) "init"
 
+# s5l8702-miu.c
+s5l8702_miu_reset(void) "reset"
+s5l8702_miu_init(void) "init"
+s5l8702_miu_read(uint32_t offset, uint32_t val) "offset 0x%08x -> 0x%08x"
+s5l8702_miu_write(uint32_t offset, uint32_t val) "offset 0x%08x <- 0x%08x"
+
 # pcf5063x.c
 pcf5063x_read(uint8_t addr, uint8_t value) "read addr 0x%02x: 0x%02x"
 pcf5063x_write(uint8_t addr, uint8_t value) "write addr 0x%02x: 0x%02x"
