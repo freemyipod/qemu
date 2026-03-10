@@ -126,9 +126,9 @@ static void ipod_nano3g_machine_init(MachineState *machine)
         exit(1);
     }
 
-    /* This board has fixed size RAM (64MiB) */
-    if (machine->ram_size != 64 * MiB) {
-        error_report("This machine can only be used with 64MiB RAM");
+    /* This board has fixed size RAM (32MiB) */
+    if (machine->ram_size != 32 * MiB) {
+        error_report("This machine can only be used with 32MiB RAM");
         exit(1);
     }
 
@@ -202,7 +202,7 @@ static void ipod_nano3g_class_init(ObjectClass *oc, void *data)
 
     mc->init = ipod_nano3g_machine_init;
     mc->default_cpu_type = ARM_CPU_TYPE_NAME("arm926");
-    mc->default_ram_size = 64 * MiB;
+    mc->default_ram_size = 32 * MiB;
     mc->default_cpus = 1;
     mc->desc = "iPod Nano 3rd Generation (ARM926EJ-S)";
 };
