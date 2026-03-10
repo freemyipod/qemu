@@ -12,6 +12,9 @@ OBJECT_DECLARE_SIMPLE_TYPE(S5L8702I2cState, S5L8702_I2C)
 #define S5L8702_I2C1_BASE   0x3C900000
 #define S5L8702_I2C_SIZE    0x00100000
 
+#define S5L8702_I2C0_IRQ    21
+#define S5L8702_I2C1_IRQ    22
+
 #define S5L8702_I2C_NUM_REGS    (S5L8702_I2C_SIZE / sizeof(uint32_t))
 
 struct S5L8702I2cState {
@@ -21,6 +24,7 @@ struct S5L8702I2cState {
     /*< public >*/
     MemoryRegion iomem;
     I2CBus *bus;
+    qemu_irq irq;
 
     uint32_t iiccon;
     uint32_t iicstat;

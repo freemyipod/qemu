@@ -147,6 +147,8 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
     }
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->i2c[0]), 0, S5L8702_I2C0_BASE);
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->i2c[1]), 0, S5L8702_I2C1_BASE);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->i2c[0]), 0, qdev_get_gpio_in(glue, S5L8702_I2C0_IRQ));
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->i2c[1]), 0, qdev_get_gpio_in(glue, S5L8702_I2C1_IRQ));
 
     /* Timer */
     s->timer.pclk = &s->pclk;
