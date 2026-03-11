@@ -9,6 +9,8 @@
 #include "hw/arm/s5l8702.h"
 #include "hw/misc/unimp.h"
 #include "hw/arm/exynos4210.h"
+#include "hw/misc/s5l8702-usbotg.h"
+#include "hw/misc/s5l8702-usbphy.h"
 #include "trace.h"
 
 
@@ -75,6 +77,8 @@ static void s5l8702_init(Object *obj) {
     object_initialize_child(obj, "nand", &s->nand, TYPE_S5L8702_NAND);
     object_initialize_child(obj, "nand_ecc", &s->nand_ecc, TYPE_S5L8702_NAND_ECC);
     object_initialize_child(obj, "miu", &s->miu, TYPE_S5L8702_MIU);
+    object_initialize_child(obj, "usbotg", &s->usbotg, TYPE_S5L8702_USBOTG);
+    object_initialize_child(obj, "usbphy", &s->usbphy, TYPE_S5L8702_USBPHY);
 }
 
 static void s5l8702_realize(DeviceState *dev, Error **errp) {
@@ -224,10 +228,17 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
     sysbus_realize(SYS_BUS_DEVICE(&s->miu), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->miu), 0, S5L8702_MIU_BASE);
 
+    /* USB OTG */
+    sysbus_realize(SYS_BUS_DEVICE(&s->usbotg), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->usbotg), 0, S5L8702_USBOTG_BASE);
+
+    /* USB PHY */
+    sysbus_realize(SYS_BUS_DEVICE(&s->usbphy), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->usbphy), 0, S5L8702_USBPHY_BASE);
+
     create_unimplemented_device("unimplemented-mem", 0x0, 0xFFFFFFFF);
     create_unimplemented_device("wdt", 0x3c800000, 0x100000);
     create_unimplemented_device("sm1_div", 0x38501000, 0x04);
-    create_unimplemented_device("phy", 0x3c400000, 0x100000);
     create_unimplemented_device("unknown-dev-1", 0x39a00000, 0x100000);
 }
 

@@ -369,3 +369,15 @@ s5l8702_nand_ecc_init(void) "init"
 s5l8702_nand_ecc_reset(void) "reset"
 s5l8702_nand_ecc_start(void) "ECC operation started"
 s5l8702_nand_ecc_clearint(void) "interrupt cleared"
+
+# s5l8702-usbotg.c
+s5l8702_usbotg_init(void) "init"
+s5l8702_usbotg_reset(void) "reset"
+s5l8702_usbotg_read(uint32_t offset, uint32_t val) "offset 0x%08x -> 0x%08x"
+s5l8702_usbotg_write(uint32_t offset, uint32_t val) "offset 0x%08x <- 0x%08x"
+
+# s5l8702-usbphy.c
+s5l8702_usbphy_init(void) "init"
+s5l8702_usbphy_reset(void) "reset"
+s5l8702_usbphy_read(uint32_t offset, uint32_t val) "offset 0x%08x -> 0x%08x"
+s5l8702_usbphy_write(uint32_t offset, uint32_t val) "offset 0x%08x <- 0x%08x"
