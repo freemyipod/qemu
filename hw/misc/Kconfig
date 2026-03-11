@@ -184,4 +184,8 @@ config PCF5063X
     bool
     depends on I2C
 
+config D1671
+    bool
+    depends on I2C
+
 source macio/Kconfig

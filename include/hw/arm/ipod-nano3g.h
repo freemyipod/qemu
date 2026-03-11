@@ -7,7 +7,7 @@
 #include "target/arm/cpu.h"
 #include "sysemu/block-backend.h"
 #include "hw/arm/s5l8702.h"
-#include "hw/misc/pcf5063x.h"
+#include "hw/misc/d1671.h"
 
 #define TYPE_IPOD_NANO3G_MACHINE   MACHINE_TYPE_NAME("ipod-nano3g")
 OBJECT_DECLARE_SIMPLE_TYPE(IpodNano3gState, IPOD_NANO3G_MACHINE)
@@ -20,7 +20,7 @@ struct IpodNano3gState {
     S5L8702State soc;
     MemoryRegion dram;
     MemoryRegion dram_alias;
-    Pcf5063xState pcf5063x;
+    D1671State d1671;
 
     char *bootrom_path;
     char *nand_path;

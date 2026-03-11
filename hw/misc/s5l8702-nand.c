@@ -11,6 +11,7 @@
 #include "file-cow.h"
 #include "hw/misc/s5l8702-nand.h"
 #include "trace.h"
+#include "hw/hw.h"
 #include "hw/qdev-properties.h"
 #include "exec/memory.h"
 #include "exec/address-spaces.h"
