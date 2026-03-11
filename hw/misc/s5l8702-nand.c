@@ -48,70 +48,70 @@ static bool fmiss_vm_step(void *opaque, fmiss_vm *vm) {
     uint8_t dst_reg = dst % 8;
     uint8_t src_reg = src % 8;
 
-    trace_s5l8702_nand_fmiss_insn(vm->pc - vm->start_pc, opcode, dst, src, imm);
+    trace_s5l8702_fmiss_insn(vm->pc - vm->start_pc, opcode, dst, src, imm);
 
     switch (opcode) {
     case 0x00: /* Terminate */
-        trace_s5l8702_nand_fmiss_terminate();
+        trace_s5l8702_fmiss_terminate();
         return false;
 
     case 0x01: /* Write immediate to NAND-register space */
-        trace_s5l8702_nand_fmiss_write_nand_imm((uint32_t)src, imm);
+        trace_s5l8702_fmiss_write_nand_imm((uint32_t)src, imm);
         nand_mem_write(opaque, src, imm, 4);
         break;
 
     case 0x02: /* Write register to NAND-register space */
-        trace_s5l8702_nand_fmiss_write_nand_reg((uint32_t)src, vm->regs[dst_reg], dst_reg);
+        trace_s5l8702_fmiss_write_nand_reg((uint32_t)src, vm->regs[dst_reg], dst_reg);
         nand_mem_write(opaque, src, vm->regs[dst_reg], 4);
         break;
 
     case 0x03: /* Dereference address in register */
         address_space_read(&address_space_memory, vm->regs[src_reg] ^ 0x80000000, MEMTXATTRS_UNSPECIFIED, &vm->regs[dst_reg], 4);
-        trace_s5l8702_nand_fmiss_deref(dst_reg, src_reg, vm->regs[src_reg] ^ 0x80000000);
+        trace_s5l8702_fmiss_deref(dst_reg, src_reg, vm->regs[src_reg] ^ 0x80000000);
         break;
 
     case 0x04: /* Read from NAND-register space into a register */
         uint32_t val = nand_mem_read(opaque, src, 4);
         vm->regs[dst_reg] = val & imm;
-        trace_s5l8702_nand_fmiss_read_nand(dst_reg, (uint32_t)src, val, imm);
+        trace_s5l8702_fmiss_read_nand(dst_reg, (uint32_t)src, val, imm);
         break;
 
     case 0x05: /* Load immediate into register */
         vm->regs[dst_reg] = imm;
-        trace_s5l8702_nand_fmiss_load_imm(dst_reg, imm);
+        trace_s5l8702_fmiss_load_imm(dst_reg, imm);
         break;
 
     case 0x06: /* Move register to register */
         vm->regs[dst_reg] = vm->regs[src_reg];
-        trace_s5l8702_nand_fmiss_mov(dst_reg, src_reg, vm->regs[dst_reg]);
+        trace_s5l8702_fmiss_mov(dst_reg, src_reg, vm->regs[dst_reg]);
         break;
 
     case 0x07: /* Wait for FMCSTAT – no-op in emulation */
-        trace_s5l8702_nand_fmiss_wait(dst);
+        trace_s5l8702_fmiss_wait(dst);
         break;
 
     case 0x0a: /* AND */
         vm->regs[dst_reg] = imm == 0 ? vm->regs[dst_reg] & vm->regs[src_reg] : vm->regs[src_reg] & imm;
-        trace_s5l8702_nand_fmiss_alu(dst_reg, "and", src_reg, imm, vm->regs[dst_reg]);
+        trace_s5l8702_fmiss_alu(dst_reg, "and", src_reg, imm, vm->regs[dst_reg]);
         break;
 
     case 0x0b: /* OR */
         vm->regs[dst_reg] = imm == 0 ? vm->regs[dst_reg] | vm->regs[src_reg] : vm->regs[src_reg] | imm;
-        trace_s5l8702_nand_fmiss_alu(dst_reg, "or", src_reg, imm, vm->regs[dst_reg]);
+        trace_s5l8702_fmiss_alu(dst_reg, "or", src_reg, imm, vm->regs[dst_reg]);
         break;
 
     case 0x0c: /* ADD */
         vm->regs[dst_reg] = imm == 0 ? vm->regs[dst_reg] + vm->regs[src_reg] : vm->regs[src_reg] + imm;
-        trace_s5l8702_nand_fmiss_alu(dst_reg, "add", src_reg, imm, vm->regs[dst_reg]);
+        trace_s5l8702_fmiss_alu(dst_reg, "add", src_reg, imm, vm->regs[dst_reg]);
         break;
 
     case 0x0d: /* SUB */
         vm->regs[dst_reg] = imm == 0 ? vm->regs[dst_reg] - vm->regs[src_reg] : vm->regs[src_reg] - imm;
-        trace_s5l8702_nand_fmiss_alu(dst_reg, "sub", src_reg, imm, vm->regs[dst_reg]);
+        trace_s5l8702_fmiss_alu(dst_reg, "sub", src_reg, imm, vm->regs[dst_reg]);
         break;
 
     case 0x0e: /* JNZ */
-        trace_s5l8702_nand_fmiss_branch("jnz", dst_reg, vm->regs[dst_reg], imm);
+        trace_s5l8702_fmiss_branch("jnz", dst_reg, vm->regs[dst_reg], imm);
         if (vm->regs[dst_reg] != 0) {
             vm->pc = vm->start_pc + imm;
             return true;
@@ -121,22 +121,22 @@ static bool fmiss_vm_step(void *opaque, fmiss_vm *vm) {
     case 0x11: /* Store register to address given by another register */
         uint32_t addr = vm->regs[src_reg] & ~0x80000000u;
         uint32_t data = vm->regs[dst_reg];
-        trace_s5l8702_nand_fmiss_store_mem(src_reg, addr, dst_reg, data);
+        trace_s5l8702_fmiss_store_mem(src_reg, addr, dst_reg, data);
         address_space_write(&address_space_memory, addr, MEMTXATTRS_UNSPECIFIED, &data, 4);
         break;
 
     case 0x13: /* SHL */
         vm->regs[dst_reg] = imm == 0 ? vm->regs[dst_reg] << vm->regs[src_reg] : vm->regs[src_reg] << imm;
-        trace_s5l8702_nand_fmiss_alu(dst_reg, "shl", src_reg, imm, vm->regs[dst_reg]);
+        trace_s5l8702_fmiss_alu(dst_reg, "shl", src_reg, imm, vm->regs[dst_reg]);
         break;
 
     case 0x14: /* SHR */
         vm->regs[dst_reg] = imm == 0 ? vm->regs[dst_reg] >> vm->regs[src_reg] : vm->regs[src_reg] >> imm;
-        trace_s5l8702_nand_fmiss_alu(dst_reg, "shr", src_reg, imm, vm->regs[dst_reg]);
+        trace_s5l8702_fmiss_alu(dst_reg, "shr", src_reg, imm, vm->regs[dst_reg]);
         break;
 
     case 0x17: /* JZ */
-        trace_s5l8702_nand_fmiss_branch("jz", dst_reg, vm->regs[dst_reg], imm);
+        trace_s5l8702_fmiss_branch("jz", dst_reg, vm->regs[dst_reg], imm);
         if (vm->regs[dst_reg] == 0) {
             vm->pc = vm->start_pc + imm;
             return true;
@@ -146,11 +146,11 @@ static bool fmiss_vm_step(void *opaque, fmiss_vm *vm) {
     case 0x18: /* Load from NAND address given by register */
         uint32_t value = nand_mem_read(opaque, vm->regs[src_reg], 4);
         vm->regs[dst_reg] = value;
-        trace_s5l8702_nand_fmiss_load_nand(dst_reg, src_reg, value);
+        trace_s5l8702_fmiss_load_nand(dst_reg, src_reg, value);
         break;
 
     case 0x19: /* Store to NAND address given by register */
-        trace_s5l8702_nand_fmiss_store_nand(src_reg, dst_reg, vm->regs[src_reg], vm->regs[dst_reg]);
+        trace_s5l8702_fmiss_store_nand(src_reg, dst_reg, vm->regs[src_reg], vm->regs[dst_reg]);
         nand_mem_write(opaque, vm->regs[src_reg], vm->regs[dst_reg], 4);
         break;
 
@@ -164,9 +164,9 @@ static bool fmiss_vm_step(void *opaque, fmiss_vm *vm) {
 }
 
 static void fmiss_vm_execute(void *opaque, fmiss_vm *vm) {
-    trace_s5l8702_nand_fmiss_start(vm->start_pc);
+    trace_s5l8702_fmiss_start(vm->start_pc);
     while (fmiss_vm_step(opaque, vm));
-    trace_s5l8702_nand_fmiss_done();
+    trace_s5l8702_fmiss_done();
 }
 
 /* --------------------------------------------------------------------------
@@ -195,9 +195,10 @@ void s5l8702_nand_set_buffered_page(S5L8702NandState *s, uint32_t page) {
     }
 }
 
-/* --------------------------------------------------------------------------
- * MMIO read
- * -------------------------------------------------------------------------- */
+static void s5l8702_nand_update_irq(S5L8702NandState *s) {
+    /* If any interrupt flags are set, assert the IRQ. Otherwise, deassert. */
+    qemu_set_irq(s->irq, s->fmi_int != 0);
+}
 
 static uint64_t nand_mem_read(void *opaque, hwaddr addr, unsigned size) {
     S5L8702NandState *s = S5L8702_NAND(opaque);
@@ -368,14 +369,15 @@ static void nand_mem_write(void *opaque, hwaddr addr, uint64_t val, unsigned siz
 
     case FMI_INT:
         s->fmi_int &= ~val;
+        s5l8702_nand_update_irq(s); // Drop the IRQ line when cleared!
         break;
 
     case FMI_START:
         if (val == 0xfff5) {
             fmiss_vm_reset(&s->fmiss_vm, s->fmi_program);
             fmiss_vm_execute(opaque, &s->fmiss_vm);
-            qemu_irq_raise(s->irq);
             s->fmi_int |= 1;
+            s5l8702_nand_update_irq(s); // Raise the IRQ line
         }
         break;
 
@@ -462,6 +464,8 @@ static void s5l8702_nand_reset(DeviceState *dev) {
     s->buffered_page = -1;
 
     fmiss_vm_reset(&s->fmiss_vm, 0);
+    
+    s5l8702_nand_update_irq(s); // Ensure line is low on boot
 }
 
 static Property s5l8702_nand_properties[] = {
