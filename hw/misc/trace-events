@@ -293,6 +293,19 @@ s5l8702_aes_no_support(const char *keytype) "%s key"
 s5l8702_aes_reset(void) "reset"
 s5l8702_aes_init(void) "init"
 
+# s5l8702-sysic.c
+s5l8702_sysic_read(uint32_t addr, uint32_t val) "read offset 0x%04x -> 0x%08x"
+s5l8702_sysic_write(uint32_t addr, uint32_t val) "write offset 0x%04x <- 0x%08x"
+s5l8702_sysic_power_onctrl(uint32_t val) "power on control: 0x%08x"
+s5l8702_sysic_power_offctrl(uint32_t val) "power off control: 0x%08x"
+s5l8702_sysic_gpio_intstat_clear(uint32_t group, uint32_t val) "GPIO group %u interrupt status cleared: 0x%08x"
+s5l8702_sysic_gpio_irq_raise(uint32_t group) "GPIO group %u IRQ raised"
+s5l8702_sysic_gpio_irq_lower(uint32_t group) "GPIO group %u IRQ lowered"
+s5l8702_sysic_gpio_inten_set(uint32_t group, uint32_t val) "GPIO group %u interrupt enable: 0x%08x"
+s5l8702_sysic_gpio_inttype_set(uint32_t group, uint32_t val) "GPIO group %u interrupt type: 0x%08x"
+s5l8702_sysic_reset(void) "reset"
+s5l8702_sysic_init(void) "init"
+
 # s5l8702-clk.c
 s5l8702_clk_reset(void) "reset"
 s5l8702_clk_init(void) "init"

@@ -11,6 +11,7 @@
 #include "hw/arm/exynos4210.h"
 #include "hw/misc/s5l8702-usbotg.h"
 #include "hw/misc/s5l8702-usbphy.h"
+#include "hw/misc/s5l8702-sysic.h"
 #include "trace.h"
 
 
@@ -79,6 +80,7 @@ static void s5l8702_init(Object *obj) {
     object_initialize_child(obj, "miu", &s->miu, TYPE_S5L8702_MIU);
     object_initialize_child(obj, "usbotg", &s->usbotg, TYPE_S5L8702_USBOTG);
     object_initialize_child(obj, "usbphy", &s->usbphy, TYPE_S5L8702_USBPHY);
+    object_initialize_child(obj, "sysic", &s->sysic, TYPE_S5L8702_SYSIC);
 }
 
 static void s5l8702_realize(DeviceState *dev, Error **errp) {
@@ -236,10 +238,14 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
     sysbus_realize(SYS_BUS_DEVICE(&s->usbphy), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->usbphy), 0, S5L8702_USBPHY_BASE);
 
+    /* System IC (unconfirmed, makes no difference to emulation for now) */
+    sysbus_realize(SYS_BUS_DEVICE(&s->sysic), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->sysic), 0, S5L8702_SYSIC_BASE);
+    // TODO: what are the IRQs here?
+
     create_unimplemented_device("unimplemented-mem", 0x0, 0xFFFFFFFF);
     create_unimplemented_device("wdt", 0x3c800000, 0x100000);
     create_unimplemented_device("sm1_div", 0x38501000, 0x04);
-    create_unimplemented_device("unknown-dev-1", 0x39a00000, 0x100000);
 }
 
 static void s5l8702_class_init(ObjectClass *oc, void *data)
