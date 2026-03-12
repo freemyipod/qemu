@@ -47,22 +47,33 @@ static void s5l8702_i2c_update_irq(S5L8702I2cState *s) {
     qemu_set_irq(s->irq, irq_pend ? 1 : 0);
 }
 
-static void s5l8702_i2c_resume_transfer(S5L8702I2cState *s) {
+static void s5l8702_i2c_resume_transfer(S5L8702I2cState *s)
+{
     uint32_t mode = s->iicstat & 0xF0;
 
     if (mode == 0xF0) { // Resume TX
         int ack = i2c_send(s->bus, (uint8_t) s->iicds);
         if (ack) {
-            s->iicstat |= S5L8702_I2C_IICSTAT_MODE_LRB; // NACK
+            s->iicstat |= S5L8702_I2C_IICSTAT_MODE_LRB; // NACK from slave
         } else {
-            s->iicstat &= ~S5L8702_I2C_IICSTAT_MODE_LRB; // ACK
+            s->iicstat &= ~S5L8702_I2C_IICSTAT_MODE_LRB; // ACK from slave
         }
         s->iiccon |= S5L8702_I2C_IICCON_IRQ; 
         s->iicstat2 |= BIT(8);
     }
     else if (mode == 0xB0) { // Resume RX
         s->iicds = i2c_recv(s->bus);
-        s->iicstat &= ~S5L8702_I2C_IICSTAT_MODE_LRB; // Clear NACK
+        
+        /* 
+         * If the guest enabled ACK_GEN (Bit 7), we respond with ACK (LRB = 0).
+         * If the guest disabled it, we respond with NACK (LRB = 1).
+         */
+        if (s->iiccon & S5L8702_I2C_IICCON_ACK_GEN) {
+            s->iicstat &= ~S5L8702_I2C_IICSTAT_MODE_LRB; // ACK
+        } else {
+            s->iicstat |= S5L8702_I2C_IICSTAT_MODE_LRB;  // NACK
+        }
+
         s->iiccon |= S5L8702_I2C_IICCON_IRQ; 
         s->iicstat2 |= BIT(8); 
     }
