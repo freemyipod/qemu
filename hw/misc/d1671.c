@@ -5,8 +5,8 @@
 #include "hw/misc/d1671.h"
 #include "trace.h"
 
-#define D1671_STATUSA 0x04
-#define D1671_STATUSB 0x05
+#define D1671_STATUSA 0x05
+#define D1671_STATUSB 0x06
 #define D1671_SYSCTRLA 0x08
 #define D1671_CHCTL 0x21
 #define D1671_ADC_CTRL 0x30
@@ -19,13 +19,11 @@ static uint8_t d1671_read(D1671State *s, uint8_t addr) {
 
     switch (addr) {
     case D1671_STATUSA:
-        // Bit 3 (0x08) = VBUS (USB) Present.
-        r = 0x08;
+        r = D1671_STATUSA_USB_DETECTED | D1671_STATUSA_FIREWIRE_DETECTED | D1671_STATUSA_ACCESSORY_DETECTED;
         register_name = "STATUSA";
         break;
     case D1671_STATUSB:
-        // Bit 0 (0x01) = Hold switch (0=Locked, 1=Unlocked). 
-        r = 0x01;
+        r = D1671_STATUSB_HOLD_SWITCH;
         register_name = "STATUSB";
         break;
     case D1671_SYSCTRLA:
@@ -37,8 +35,9 @@ static uint8_t d1671_read(D1671State *s, uint8_t addr) {
         r = s->regs[D1671_CHCTL] | 0x01;
         register_name = "CHCTL";
         break;
+    // not totally sure how the ADC works
     case D1671_ADC_CTRL:
-        r = s->regs[D1671_ADC_CTRL] & ~0x08;
+        r = s->regs[D1671_ADC_CTRL];
         register_name = "ADC_CTRL";
         break;
     case D1671_ADC_DATA_LSB:
@@ -48,6 +47,10 @@ static uint8_t d1671_read(D1671State *s, uint8_t addr) {
     case D1671_ADC_DATA_MSB:
         register_name = "ADC_DATA_MSB";
         r = 0x80;
+        break;
+    case 0x33:
+        register_name = "ADC_DATA?";
+        r = s->adc[s->regs[D1671_ADC_CTRL] & 0x0F];
         break;
     }
 
@@ -95,6 +98,8 @@ static int d1671_send(I2CSlave *slave, uint8_t data) {
 static void d1671_reset(DeviceState *dev) {
     D1671State *s = D1671(dev);
     memset(s->regs, 0, sizeof(s->regs));
+    memset(s->adc, 0, sizeof(s->adc));
+    s->adc[12] = 0x99; // Battery Voltage
 }
 
 static void d1671_class_init(ObjectClass *klass, void *data) {
