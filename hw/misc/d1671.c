@@ -5,13 +5,14 @@
 #include "hw/misc/d1671.h"
 #include "trace.h"
 
-#define D1671_STATUSA 0x05
-#define D1671_STATUSB 0x06
+#define D1671_STATUSA 0x04
+#define D1671_STATUSB 0x05
 #define D1671_SYSCTRLA 0x08
 #define D1671_CHCTL 0x21
 #define D1671_ADC_CTRL 0x30
 #define D1671_ADC_DATA_LSB 0x31
 #define D1671_ADC_DATA_MSB 0x32
+#define D1671_ADC_DATA_CH1 0x33
 
 static uint8_t d1671_read(D1671State *s, uint8_t addr) {
     uint8_t r = s->regs[addr];
@@ -19,7 +20,7 @@ static uint8_t d1671_read(D1671State *s, uint8_t addr) {
 
     switch (addr) {
     case D1671_STATUSA:
-        r = D1671_STATUSA_USB_DETECTED | D1671_STATUSA_FIREWIRE_DETECTED | D1671_STATUSA_ACCESSORY_DETECTED;
+        r = D1671_STATUSA_USB_DETECTED;
         register_name = "STATUSA";
         break;
     case D1671_STATUSB:
@@ -31,26 +32,24 @@ static uint8_t d1671_read(D1671State *s, uint8_t addr) {
         register_name = "SYSCTRLA";
         break;
     case D1671_CHCTL:
-        // Fast charging enabled
-        r = s->regs[D1671_CHCTL] | 0x01;
+        r = s->regs[D1671_CHCTL] | 0x01; // Set Bit 0 (0x01) = Fast Charging Enabled
         register_name = "CHCTL";
         break;
-    // not totally sure how the ADC works
     case D1671_ADC_CTRL:
-        r = s->regs[D1671_ADC_CTRL];
+        r = s->regs[D1671_ADC_CTRL] & ~0x08; // Clear Busy bit
         register_name = "ADC_CTRL";
         break;
     case D1671_ADC_DATA_LSB:
         register_name = "ADC_DATA_LSB";
-        r = 0x00;
+        r = s->adc[s->regs[D1671_ADC_CTRL] & 0x0F] & 0x03;
         break;
     case D1671_ADC_DATA_MSB:
         register_name = "ADC_DATA_MSB";
-        r = 0x80;
+        r = (s->adc[s->regs[D1671_ADC_CTRL] & 0x0F] >> 2) & 0xFF;
         break;
-    case 0x33:
-        register_name = "ADC_DATA?";
-        r = s->adc[s->regs[D1671_ADC_CTRL] & 0x0F];
+    case D1671_ADC_DATA_CH1:
+        register_name = "ADC_DATA_CH1";
+        r = s->adc[s->regs[D1671_ADC_CTRL] & 0x0F] & 0xFF;
         break;
     }
 
@@ -99,7 +98,9 @@ static void d1671_reset(DeviceState *dev) {
     D1671State *s = D1671(dev);
     memset(s->regs, 0, sizeof(s->regs));
     memset(s->adc, 0, sizeof(s->adc));
-    s->adc[12] = 0x99; // Battery Voltage
+    s->adc[9] = 0xFF;  // Charge Current (approx 100mA)
+    s->adc[11] = 0x260; // Accessory Voltage (3.6875V)
+    s->adc[12] = 0x260; // Battery Voltage (3.6875V)
 }
 
 static void d1671_class_init(ObjectClass *klass, void *data) {

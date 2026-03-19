@@ -34,6 +34,8 @@ struct S5L8702I2cState {
     uint32_t iicunk14;
     uint32_t iicunk18;
     uint32_t iicstat2;
+
+    uint8_t rx_shift_register;
 };
 
 #endif /* HW_I2C_S5L8702_I2C_H */

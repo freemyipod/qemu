@@ -24,7 +24,7 @@ struct D1671State {
     uint8_t word;
 
     uint8_t regs[0xFF];
-    uint8_t adc[16];
+    uint16_t adc[16];
 };
 
 #endif /* HW_MISC_D1671_H */

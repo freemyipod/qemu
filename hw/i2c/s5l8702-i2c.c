@@ -62,7 +62,8 @@ static void s5l8702_i2c_resume_transfer(S5L8702I2cState *s)
         s->iicstat2 |= BIT(8);
     }
     else if (mode == 0xB0) { // Resume RX
-        s->iicds = i2c_recv(s->bus);
+        s->iicds = s->rx_shift_register;
+        s->rx_shift_register = i2c_recv(s->bus);
         
         /* 
          * If the guest enabled ACK_GEN (Bit 7), we respond with ACK (LRB = 0).
@@ -152,35 +153,43 @@ static void s5l8702_i2c_write(void *opaque, hwaddr offset, uint64_t val, unsigne
         uint32_t mode = val & 0xF0;
         s->iicstat = (s->iicstat & ~0xF0) | mode;
 
-        if (mode == 0xF0) { // START TX
-            int ack = i2c_start_send(s->bus, ((uint8_t) s->iicds) >> 1);
-            if (ack) {
-                s->iicstat |= S5L8702_I2C_IICSTAT_MODE_LRB; // NACK
-            } else {
-                s->iicstat &= ~S5L8702_I2C_IICSTAT_MODE_LRB; // ACK
+        if (!(val & 0x10)) {
+            // Tx/Rx Disabled. Abort transfer and clear busy bit.
+            if (s->iicstat & S5L8702_I2C_IICSTAT_MODE_BB) {
+                i2c_end_transfer(s->bus);
+                s->iicstat &= ~S5L8702_I2C_IICSTAT_MODE_BB; // Bus is free
             }
-            s->iicstat |= S5L8702_I2C_IICSTAT_MODE_BB; // Bus is busy
-            s->iiccon |= S5L8702_I2C_IICCON_IRQ; 
-            s->iicstat2 |= BIT(8);
-        }
-        else if (mode == 0xB0) { // START RX
-            int ack = i2c_start_recv(s->bus, ((uint8_t) s->iicds) >> 1);
-            if (ack) {
-                s->iicstat |= S5L8702_I2C_IICSTAT_MODE_LRB; // NACK
-            } else {
-                s->iicstat &= ~S5L8702_I2C_IICSTAT_MODE_LRB; // ACK
+        } else {
+            if (mode == 0xF0) { // START TX
+                int ack = i2c_start_send(s->bus, ((uint8_t) s->iicds) >> 1);
+                if (ack) {
+                    s->iicstat |= S5L8702_I2C_IICSTAT_MODE_LRB; // NACK
+                } else {
+                    s->iicstat &= ~S5L8702_I2C_IICSTAT_MODE_LRB; // ACK
+                }
+                s->iicstat |= S5L8702_I2C_IICSTAT_MODE_BB; // Bus is busy
+                s->iiccon |= S5L8702_I2C_IICCON_IRQ; 
+                s->iicstat2 |= BIT(8);
             }
-            s->iicstat |= S5L8702_I2C_IICSTAT_MODE_BB; // Bus is busy
-            s->iiccon |= S5L8702_I2C_IICCON_IRQ; 
-            s->iicstat2 |= BIT(8);
-        }
-        else if (mode == 0xD0) { // STOP TX
-            i2c_end_transfer(s->bus);
-            s->iicstat &= ~S5L8702_I2C_IICSTAT_MODE_BB; // Bus is free
-        }
-        else if (mode == 0x90) { // STOP RX
-            i2c_end_transfer(s->bus);
-            s->iicstat &= ~S5L8702_I2C_IICSTAT_MODE_BB; // Bus is free
+            else if (mode == 0xB0) { // START RX
+                int ack = i2c_start_recv(s->bus, ((uint8_t) s->iicds) >> 1);
+                if (ack) {
+                    s->iicstat |= S5L8702_I2C_IICSTAT_MODE_LRB; // NACK
+                } else {
+                    s->iicstat &= ~S5L8702_I2C_IICSTAT_MODE_LRB; // ACK
+                }
+                s->iicstat |= S5L8702_I2C_IICSTAT_MODE_BB; // Bus is busy
+                s->iiccon |= S5L8702_I2C_IICCON_IRQ; 
+                s->iicstat2 |= BIT(8);
+            }
+            else if (mode == 0xD0) { // STOP TX
+                i2c_end_transfer(s->bus);
+                s->iicstat &= ~S5L8702_I2C_IICSTAT_MODE_BB; // Bus is free
+            }
+            else if (mode == 0x90) { // STOP RX
+                i2c_end_transfer(s->bus);
+                s->iicstat &= ~S5L8702_I2C_IICSTAT_MODE_BB; // Bus is free
+            }
         }
 
         s5l8702_i2c_update_irq(s);
