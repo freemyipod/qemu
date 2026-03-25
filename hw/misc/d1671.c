@@ -20,11 +20,12 @@ static uint8_t d1671_read(D1671State *s, uint8_t addr) {
 
     switch (addr) {
     case D1671_STATUSA:
-        r = D1671_STATUSA_USB_DETECTED;
+        r = D1671_STATUSA_USB_DETECTED | D1671_STATUSA_FIREWIRE_DETECTED | 
+            D1671_STATUSA_ACCESSORY_DETECTED | D1671_STATUSA_CHARGER_DETECTED;
         register_name = "STATUSA";
         break;
     case D1671_STATUSB:
-        r = D1671_STATUSB_HOLD_SWITCH;
+        r = D1671_STATUSB_HOLD_SWITCH_OFF;
         register_name = "STATUSB";
         break;
     case D1671_SYSCTRLA:
@@ -98,9 +99,11 @@ static void d1671_reset(DeviceState *dev) {
     D1671State *s = D1671(dev);
     memset(s->regs, 0, sizeof(s->regs));
     memset(s->adc, 0, sizeof(s->adc));
+
+    // Values taken from real iPod Diagnostic Mode
     s->adc[9] = 0xFF;  // Charge Current (approx 100mA)
-    s->adc[11] = 0x260; // Accessory Voltage (3.6875V)
-    s->adc[12] = 0x260; // Battery Voltage (3.6875V)
+    s->adc[11] = 0x3FF; // Accessory Voltage (2.497V)
+    s->adc[12] = 0x367; // Battery Voltage (4.201V)
 }
 
 static void d1671_class_init(ObjectClass *klass, void *data) {

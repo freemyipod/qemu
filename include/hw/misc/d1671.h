@@ -11,9 +11,10 @@ OBJECT_DECLARE_SIMPLE_TYPE(D1671State, D1671)
 #define D1671_STATUSA_USB_DETECTED       (1 << 3)
 #define D1671_STATUSA_FIREWIRE_DETECTED  (1 << 4)
 #define D1671_STATUSA_ACCESSORY_DETECTED (1 << 5)
+#define D1671_STATUSA_CHARGER_DETECTED   (1 << 6)
 
 /* STATUSB register bits */
-#define D1671_STATUSB_HOLD_SWITCH        (1 << 0)
+#define D1671_STATUSB_HOLD_SWITCH_OFF        (1 << 0)
 
 struct D1671State {
     /*< private >*/

@@ -4,6 +4,7 @@
 #include "hw/irq.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
+#include "qemu/timer.h"
 #include "hw/i2c/s5l8702-i2c.h"
 #include "trace.h"
 
@@ -47,6 +48,23 @@ static void s5l8702_i2c_update_irq(S5L8702I2cState *s) {
     qemu_set_irq(s->irq, irq_pend ? 1 : 0);
 }
 
+static void s5l8702_i2c_irq_timer_cb(void *opaque)
+{
+    S5L8702I2cState *s = S5L8702_I2C(opaque);
+
+    s->iiccon |= S5L8702_I2C_IICCON_IRQ;
+    s->iicstat2 |= BIT(8);
+
+    if (s->last_was_start) {
+        s->iicstat2 |= BIT(11);
+        s->last_was_start = false;
+    } else if ((s->iicstat & 0xF0) == 0xB0) { // RX mode
+        s->iicstat2 |= BIT(10);
+    }
+
+    s5l8702_i2c_update_irq(s);
+}
+
 static void s5l8702_i2c_resume_transfer(S5L8702I2cState *s)
 {
     uint32_t mode = s->iicstat & 0xF0;
@@ -58,8 +76,8 @@ static void s5l8702_i2c_resume_transfer(S5L8702I2cState *s)
         } else {
             s->iicstat &= ~S5L8702_I2C_IICSTAT_MODE_LRB; // ACK from slave
         }
-        s->iiccon |= S5L8702_I2C_IICCON_IRQ; 
-        s->iicstat2 |= BIT(8);
+        /* Delay IRQ re-assertion to prevent infinite loops */
+        timer_mod(s->irq_timer, qemu_clock_get_us(QEMU_CLOCK_VIRTUAL) + 1);
     }
     else if (mode == 0xB0) { // Resume RX
         s->iicds = s->rx_shift_register;
@@ -75,8 +93,8 @@ static void s5l8702_i2c_resume_transfer(S5L8702I2cState *s)
             s->iicstat |= S5L8702_I2C_IICSTAT_MODE_LRB;  // NACK
         }
 
-        s->iiccon |= S5L8702_I2C_IICCON_IRQ; 
-        s->iicstat2 |= BIT(8); 
+        /* Delay IRQ re-assertion */
+        timer_mod(s->irq_timer, qemu_clock_get_us(QEMU_CLOCK_VIRTUAL) + 1);
     }
 }
 
@@ -112,6 +130,10 @@ static uint64_t s5l8702_i2c_read(void *opaque, hwaddr offset, unsigned size) {
     case S5L8702_I2C_IIUNK18:
         r = s->iicunk18;
         trace_s5l8702_i2c_read("IIUNK18", r);
+        break;
+    case 0x1C: // RX FIFO count
+        r = (s->iicstat2 & BIT(10)) ? 1 : 0;
+        trace_s5l8702_i2c_read("FIFO_COUNT", r);
         break;
     case S5L8702_I2C_IICSTAT2:
         r = s->iicstat2;
@@ -168,8 +190,9 @@ static void s5l8702_i2c_write(void *opaque, hwaddr offset, uint64_t val, unsigne
                     s->iicstat &= ~S5L8702_I2C_IICSTAT_MODE_LRB; // ACK
                 }
                 s->iicstat |= S5L8702_I2C_IICSTAT_MODE_BB; // Bus is busy
-                s->iiccon |= S5L8702_I2C_IICCON_IRQ; 
-                s->iicstat2 |= BIT(8);
+                s->last_was_start = true;
+                /* Delay initial IRQ */
+                timer_mod(s->irq_timer, qemu_clock_get_us(QEMU_CLOCK_VIRTUAL) + 1);
             }
             else if (mode == 0xB0) { // START RX
                 int ack = i2c_start_recv(s->bus, ((uint8_t) s->iicds) >> 1);
@@ -177,10 +200,13 @@ static void s5l8702_i2c_write(void *opaque, hwaddr offset, uint64_t val, unsigne
                     s->iicstat |= S5L8702_I2C_IICSTAT_MODE_LRB; // NACK
                 } else {
                     s->iicstat &= ~S5L8702_I2C_IICSTAT_MODE_LRB; // ACK
+                    /* In RX mode, first byte is received immediately */
+                    s->rx_shift_register = i2c_recv(s->bus);
                 }
                 s->iicstat |= S5L8702_I2C_IICSTAT_MODE_BB; // Bus is busy
-                s->iiccon |= S5L8702_I2C_IICCON_IRQ; 
-                s->iicstat2 |= BIT(8);
+                s->last_was_start = true;
+                /* Delay initial IRQ */
+                timer_mod(s->irq_timer, qemu_clock_get_us(QEMU_CLOCK_VIRTUAL) + 1);
             }
             else if (mode == 0xD0) { // STOP TX
                 i2c_end_transfer(s->bus);
@@ -269,6 +295,8 @@ static void s5l8702_i2c_init(Object *obj) {
     s->bus = i2c_init_bus(DEVICE(obj), "s5l8702-i2c");
 
     sysbus_init_irq(SYS_BUS_DEVICE(obj), &s->irq);
+
+    s->irq_timer = timer_new_us(QEMU_CLOCK_VIRTUAL, s5l8702_i2c_irq_timer_cb, s);
 }
 
 static void s5l8702_i2c_class_init(ObjectClass *klass, void *data) {
