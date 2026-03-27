@@ -119,12 +119,12 @@ static const MemoryRegionOps s5l8702_sysic_ops = {
     },
 };
 
-static void s5l8702_sysic_reset(DeviceState *dev)
-{
+static void s5l8702_sysic_reset(DeviceState *dev) {
     S5L8702SysICState *s = S5L8702_SYSIC(dev);
 
     trace_s5l8702_sysic_reset();
     s->power_state = 0;
+    s->usb_connected = false;
     for (int i = 0; i < S5L8702_SYSIC_GPIO_GROUPS; i++) {
         s->gpio_int_level[i] = 0;
         s->gpio_int_status[i] = 0;
@@ -134,8 +134,7 @@ static void s5l8702_sysic_reset(DeviceState *dev)
     }
 }
 
-static void s5l8702_sysic_init(Object *obj)
-{
+static void s5l8702_sysic_init(Object *obj) {
     S5L8702SysICState *s = S5L8702_SYSIC(obj);
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
 
@@ -148,8 +147,7 @@ static void s5l8702_sysic_init(Object *obj)
     }
 }
 
-static void s5l8702_sysic_class_init(ObjectClass *klass, void *data)
-{
+static void s5l8702_sysic_class_init(ObjectClass *klass, void *data) {
     DeviceClass *dc = DEVICE_CLASS(klass);
     dc->reset = s5l8702_sysic_reset;
 }
@@ -162,8 +160,7 @@ static const TypeInfo s5l8702_sysic_type_info = {
     .class_init = s5l8702_sysic_class_init,
 };
 
-static void s5l8702_sysic_register_types(void)
-{
+static void s5l8702_sysic_register_types(void) {
     type_register_static(&s5l8702_sysic_type_info);
 }
 

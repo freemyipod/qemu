@@ -238,10 +238,20 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
     sysbus_realize(SYS_BUS_DEVICE(&s->usbphy), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->usbphy), 0, S5L8702_USBPHY_BASE);
 
-    /* System IC (unconfirmed, makes no difference to emulation for now) */
+    /* System IC - GPIO interrupt controller with USB detection */
     sysbus_realize(SYS_BUS_DEVICE(&s->sysic), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->sysic), 0, S5L8702_SYSIC_BASE);
-    // TODO: what are the IRQs here?
+    for (int grp = 0; grp < S5L8702_SYSIC_GPIO_GROUPS; grp++) {
+        sysbus_connect_irq(SYS_BUS_DEVICE(&s->sysic), grp, qdev_get_gpio_in(glue, S5L8702_SYSIC_GPIO_IRQ(grp)));
+    }
+
+    /* Signal USB connection via SYSIC GPIO interrupt
+     * (device enters Disk Mode via USB, so USB is always connected)
+     * Raise the interrupt so firmware knows USB is available for Disk Mode */
+    s->sysic.usb_connected = true;
+    s->sysic.gpio_int_status[S5L8702_SYSIC_USB_GPIO_GROUP] |= (1 << S5L8702_SYSIC_USB_GPIO_PIN);
+    s->sysic.gpio_int_enabled[S5L8702_SYSIC_USB_GPIO_GROUP] |= (1 << S5L8702_SYSIC_USB_GPIO_PIN);
+    qemu_irq_raise(s->sysic.gpio_irqs[S5L8702_SYSIC_USB_GPIO_GROUP]);
 
     create_unimplemented_device("unimplemented-mem", 0x0, 0xFFFFFFFF);
     create_unimplemented_device("wdt", 0x3c800000, 0x100000);
