@@ -233,6 +233,7 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
     /* USB OTG */
     sysbus_realize(SYS_BUS_DEVICE(&s->usbotg), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->usbotg), 0, S5L8702_USBOTG_BASE);
+    sysbus_connect_irq(SYS_BUS_DEVICE(&s->usbotg), 0, qdev_get_gpio_in(glue, S5L8702_IRQ_USBOTG));
 
     /* USB PHY */
     sysbus_realize(SYS_BUS_DEVICE(&s->usbphy), &error_fatal);
