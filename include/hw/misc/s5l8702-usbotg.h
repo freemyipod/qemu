@@ -199,6 +199,33 @@ struct S5L8702UsbOtgState {
     bool enumeration_started;
     int enumeration_phase;  /* 0=init, 1=reset injected, 2=setup ready */
     int gintsts_poll_count;
+
+    /* USB/IP server state */
+    int usbip_listen_fd;       /* TCP listen socket, -1 if not listening */
+    int usbip_client_fd;       /* Connected USB/IP client, -1 if none */
+    bool usbip_device_imported; /* True after USBIP_OP_REQ_IMPORT accepted */
+
+    /* Pending IN EP requests: host is waiting for device-to-host data */
+    struct {
+        bool pending;
+        uint32_t seqnum;   /* verbatim from CMD_SUBMIT header, echoed in RET_SUBMIT */
+    } usbip_in_pending[USB_NUM_ENDPOINTS];
+
+    /* Firmware armed IN EP but no CMD_SUBMIT yet — fulfill on arrival */
+    bool usbip_in_ep_armed[USB_NUM_ENDPOINTS];
+
+    /* Last fulfilled IN EP transfer params — used to detect maintenance ENABLEs */
+    uint32_t usbip_in_last_txsize[USB_NUM_ENDPOINTS];
+    uint32_t usbip_in_last_dma[USB_NUM_ENDPOINTS];
+    bool usbip_in_maint_xfercompl[USB_NUM_ENDPOINTS]; /* already gave free XferCompl */
+
+    /* Pending EP0 control transfer */
+    bool usbip_ep0_pending;
+    bool usbip_ep0_d2h;           /* true = d2h (IN), false = h2d (OUT) */
+    uint32_t usbip_ep0_seqnum;
+    bool usbip_ep0_status_pending; /* waiting for DOEPINT[0] XferCompl before re-arming */
+    bool usbip_inep_active;        /* DIEPINT[0] XferCompl fired for d2h, not yet cleared */
+    bool usbip_ep0_txsize_armed;   /* firmware wrote DIEPTSIZ[0] since last SETUP injection */
 };
 
 #endif /* HW_MISC_S5L8702_USBOTG_H */
