@@ -35,6 +35,9 @@ static void s5l8702_usbphy_reset(DeviceState *dev) {
 
     trace_s5l8702_usbphy_reset();
     memset(s->regs, 0, sizeof(s->regs));
+
+    // Uncomment this line to force DFU mode on boot by default
+    // s->regs[10] = 0x00000001;
 }
 
 static void s5l8702_usbphy_init(Object *obj) {
@@ -44,6 +47,9 @@ static void s5l8702_usbphy_init(Object *obj) {
 
     memory_region_init_io(&s->iomem, OBJECT(s), &s5l8702_usbphy_ops, s, TYPE_S5L8702_USBPHY, S5L8702_USBPHY_SIZE);
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
+
+    // Uncomment this line to force DFU mode on boot by default
+    // s->regs[10] = 0x00000001;
 }
 
 static void s5l8702_usbphy_class_init(ObjectClass *klass, void *data) {

@@ -150,6 +150,9 @@ static void ipod_nano3g_machine_init(MachineState *machine)
     }
     sysbus_realize(SYS_BUS_DEVICE(&s->soc), &error_fatal);
 
+    // Uncomment this line (and the line in usb-phy) to force DFU mode on boot
+    // s->soc.gpio.pdat[1] = 0x01;
+
     /* DRAM */
     memory_region_init_ram(&s->dram, OBJECT(s), "dram", machine->ram_size, &error_fatal);
     memory_region_add_subregion(get_system_memory(), S5L8702_DRAM_BASE_ADDR, &s->dram);
