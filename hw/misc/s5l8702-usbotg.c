@@ -69,11 +69,36 @@ typedef struct {
 } QEMU_PACKED usbip_device_desc_t;
 
 typedef struct {
+    uint8_t bLength;
+    uint8_t bDescriptorType;
+    uint8_t bInterfaceNumber;
+    uint8_t bAlternateSetting;
+    uint8_t bNumEndpoints;
     uint8_t bInterfaceClass;
     uint8_t bInterfaceSubClass;
     uint8_t bInterfaceProtocol;
-    uint8_t padding;
+    uint8_t iInterface;
 } QEMU_PACKED usbip_iface_desc_t;
+
+typedef struct {
+    uint8_t bLength;
+    uint8_t bDescriptorType;
+    uint8_t bEndpointAddress;  /* bit 7: direction (1=IN, 0=OUT) */
+    uint8_t bmAttributes;       /* 0x02=bulk, 0x03=interrupt */
+    uint16_t wMaxPacketSize;
+    uint8_t bInterval;
+} QEMU_PACKED usbip_ep_desc_t;
+
+typedef struct {
+    uint8_t bLength;
+    uint8_t bDescriptorType;
+    uint16_t wTotalLength;
+    uint8_t bNumInterfaces;
+    uint8_t bConfigurationValue;
+    uint8_t iConfiguration;
+    uint8_t bmAttributes;
+    uint8_t bMaxPower;
+} QEMU_PACKED usbip_config_desc_t;
 
 typedef struct {
     uint32_t command;
@@ -218,23 +243,27 @@ static bool usbip_send_devlist(S5L8702UsbOtgState *s)
     strncpy(dev_id.bus_id, "1-1", sizeof(dev_id.bus_id) - 1);
     dev_id.busnum = __builtin_bswap32(1);
     dev_id.devnum = __builtin_bswap32(2);
-    dev_id.speed  = __builtin_bswap32(2); /* USB_SPEED_FULL (was HIGH, now full for maxpacket 64 validity) */
+    dev_id.speed  = __builtin_bswap32(3); /* USB_SPEED_HIGH — real device is high-speed 480 Mbps */
     if (!usbip_send(fd, &dev_id, sizeof(dev_id))) return false;
 
-    /* Device descriptor fields with Apple vendor ID.
-     * Leave class/subclass/protocol as 0 (detailed values in GET_DESCRIPTOR).
-     * Real descriptor comes from firmware enumeration. */
+    /* Device descriptor with Apple vendor ID.
+     * Real endpoint/config info comes from firmware GET_DESCRIPTOR responses. */
     usbip_device_desc_t desc = {0};
     desc.idVendor            = __builtin_bswap16(0x05AC);  /* Apple Inc. */
-    desc.idProduct           = __builtin_bswap16(0x9999);  /* Test device (avoids apple-mfi-fastcharge) */
+    desc.idProduct           = __builtin_bswap16(0x1223);  /* DFU/MSC device */
     desc.bcdDevice           = __builtin_bswap16(0x0100);  /* version 1.0 */
+    desc.bDeviceClass        = 0x00;        /* Defined at interface level */
+    desc.bDeviceSubClass     = 0x00;
+    desc.bDeviceProtocol     = 0x00;
     desc.bNumConfigurations  = 1;
     desc.bNumInterfaces      = 1;
     if (!usbip_send(fd, &desc, sizeof(desc))) return false;
 
-    /* Interface descriptor: all zeros — real class info from GET_DESCRIPTOR */
-    usbip_iface_desc_t iface = {0};
-    if (!usbip_send(fd, &iface, sizeof(iface))) return false;
+    /* Interface descriptor: placeholder for bInterfaceClass/SubClass/Protocol.
+     * Real values come from firmware's GET_DESCRIPTOR(CONFIG) response.
+     * This is just informational for the USBIP server. */
+    uint8_t iface[4] = {0x08, 0x06, 0x50, 0x00};  /* class, subclass, protocol, padding */
+    if (!usbip_send(fd, iface, sizeof(iface))) return false;
 
     return true;
 }
@@ -253,7 +282,7 @@ static bool usbip_send_import_reply(S5L8702UsbOtgState *s)
     strncpy(dev_id.bus_id, "1-1", sizeof(dev_id.bus_id) - 1);
     dev_id.busnum = __builtin_bswap32(1);
     dev_id.devnum = __builtin_bswap32(2);
-    dev_id.speed  = __builtin_bswap32(2); /* USB_SPEED_FULL (was HIGH, now full for maxpacket 64 validity) */
+    dev_id.speed  = __builtin_bswap32(3); /* USB_SPEED_HIGH — real device is high-speed 480 Mbps */
     if (!usbip_send(fd, &dev_id, sizeof(dev_id))) return false;
 
     /* Device descriptor with Apple vendor ID. Real descriptor from firmware. */
@@ -379,8 +408,11 @@ static void usbip_handle_out_submit(S5L8702UsbOtgState *s,
     s->out_eps[ep].interrupt_status |= USB_EPINT_XferCompl;
     s->pcgcctl = 0;
 
-    /* Send RET_SUBMIT immediately — OUT transfers don't need deferred response */
-    if (!usbip_send_ret_submit(s, hdr->seqnum, NULL, 0)) {
+    /* Send RET_SUBMIT immediately — OUT transfers don't need deferred response.
+     * actual_length must equal buf_len so the host sees a complete transfer;
+     * passing data=NULL with buf_len>0 is safe because usbip_send_ret_submit
+     * only sends trailing data when data!=NULL. */
+    if (!usbip_send_ret_submit(s, hdr->seqnum, NULL, buf_len)) {
         usbip_disconnect(s);
         return;
     }
@@ -901,13 +933,11 @@ static uint64_t s5l8702_usbotg_read(void *opaque, hwaddr offset, unsigned size)
         case 0x440: {
             /* Host Port Status Register (HPRT0)
              * Bit 0: Port connect status
-             * Bit 1: Port connect detected
-             * Bits 17-13: Port speed (bit 13 = full speed, 14 = high speed)
-             * We simulate an always-connected full-speed port
+             * Bits [15:13]: Port speed (0=HS, 1=FS, 2=LS)
+             * We simulate an always-connected high-speed port (matches real device)
              */
             val = (1 << 0) |   /* Port connected */
-                  (0 << 13) |  /* Full speed (0=high, 1=full, 2=low) */
-                  (0 << 27);   /* Speed: full speed */
+                  (0 << 13);   /* High-speed (bits [15:13] = 0) */
             break;
         }
 
@@ -947,6 +977,43 @@ static uint64_t s5l8702_usbotg_read(void *opaque, hwaddr offset, unsigned size)
     qemu_log_mask(LOG_UNIMP, "USB READ [0x%03x] %s = 0x%08x\n", (unsigned)offset, offset_name(offset), (unsigned)val);
 
     return val;
+}
+
+/* Patch USB descriptors for high-speed compatibility.
+ * The bootrom firmware advertises 64-byte max packet size, which is invalid for
+ * high-speed devices (must be 512). We intercept and fix it transparently. */
+static void patch_descriptor_for_highspeed(uint8_t *data, uint32_t len)
+{
+    /* Config descriptor structure (32 bytes):
+     * 0-8:   Config descriptor (9 bytes)
+     * 9-17:  Interface descriptor (9 bytes)
+     * 18-24: Endpoint descriptor 1 (7 bytes)
+     *   22-23: wMaxPacketSize
+     * 25-31: Endpoint descriptor 2 (7 bytes)
+     *   29-30: wMaxPacketSize
+     */
+
+    if (len != 32 || data[1] != 0x02) {
+        return;  /* Not a full config descriptor, skip */
+    }
+
+    /* Verify this is the structure we expect */
+    if (data[9] != 0x09 || data[9 + 1] != 0x04 ||  /* Interface descriptor */
+        data[18] != 0x07 || data[18 + 1] != 0x05 ||  /* Endpoint 1 */
+        data[25] != 0x07 || data[25 + 1] != 0x05) {  /* Endpoint 2 */
+        return;  /* Unexpected structure, don't patch */
+    }
+
+    /* Patch endpoint 1 wMaxPacketSize: 64 bytes → 512 bytes (little-endian) */
+    data[22] = 0x00;
+    data[23] = 0x02;
+
+    /* Patch endpoint 2 wMaxPacketSize: 64 bytes → 512 bytes (little-endian) */
+    data[29] = 0x00;
+    data[30] = 0x02;
+
+    qemu_log_mask(LOG_UNIMP,
+        "USBIP: Patched descriptor wMaxPacketSize 64→512 for high-speed\n");
 }
 
 static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr offset, uint32_t val)
@@ -990,6 +1057,10 @@ static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr
                         if (len > 64) len = 64;
                         uint8_t data[64];
                         cpu_physical_memory_read(s->in_eps[0].dma_address, data, len);
+
+                        /* Patch descriptor for high-speed compatibility */
+                        patch_descriptor_for_highspeed(data, len);
+
                         qemu_log_mask(LOG_UNIMP,
                             "USBIP: EP0 d2h fulfil: %u bytes from 0x%08x seqnum=0x%x\n",
                             len, s->in_eps[0].dma_address, __builtin_bswap32(s->usbip_ep0_seqnum));
@@ -1416,7 +1487,7 @@ static void s5l8702_usbotg_reset(DeviceState *dev)
      * Bit 0: Suspend status (0=not suspended)
      * This helps firmware know device is ready
      */
-    s->dsts = (1 << 1) | 0;  /* Full speed, not suspended */
+    s->dsts = (0 << 1) | 0;  /* High speed (0=HS, 1=FS), not suspended */
     s->gotgctl = GOTGCTL_BSESSIONVALID;  /* B-session valid: firmware checks this after SETUP */
     s->gotgint = 0;
     s->gintmsk = 0;
