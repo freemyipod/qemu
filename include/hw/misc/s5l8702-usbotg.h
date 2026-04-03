@@ -209,15 +209,25 @@ struct S5L8702UsbOtgState {
     struct {
         bool pending;
         uint32_t seqnum;   /* verbatim from CMD_SUBMIT header, echoed in RET_SUBMIT */
+        uint32_t buf_len;  /* host's transfer_buffer_length — cap actual data to this */
     } usbip_in_pending[USB_NUM_ENDPOINTS];
 
     /* Firmware armed IN EP but no CMD_SUBMIT yet — fulfill on arrival */
     bool usbip_in_ep_armed[USB_NUM_ENDPOINTS];
 
-    /* Last fulfilled IN EP transfer params — used to detect maintenance ENABLEs */
-    uint32_t usbip_in_last_txsize[USB_NUM_ENDPOINTS];
-    uint32_t usbip_in_last_dma[USB_NUM_ENDPOINTS];
-    bool usbip_in_maint_xfercompl[USB_NUM_ENDPOINTS]; /* already gave free XferCompl */
+    /* XferCompl fired but maintenance re-arm ENABLE not yet skipped.
+     * The ENABLE immediately after XferCompl is a maintenance re-arm
+     * (buffer still has previous transfer data).  Skip it; the following
+     * ENABLE will have the real payload. */
+    bool usbip_in_ep_xfercompl_pending[USB_NUM_ENDPOINTS];
+
+    /* DIEPDMA was written since last ENABLE — the DMA buffer is fresh.
+     * Only ENABLEs with fresh DMA are eligible to arm/fulfill; others
+     * (e.g. firmware maintaining endpoint during enumeration) are ignored. */
+    bool usbip_in_dma_fresh[USB_NUM_ENDPOINTS];
+
+    /* DIEPTSIZ was written since last ENABLE — the transfer parameters are fresh. */
+    bool usbip_in_tsiz_fresh[USB_NUM_ENDPOINTS];
 
     /* Pending EP0 control transfer */
     bool usbip_ep0_pending;

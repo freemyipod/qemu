@@ -194,8 +194,9 @@ static void usbip_disconnect_impl(S5L8702UsbOtgState *s, const char *reason)
     s->usbip_ep0_txsize_armed = false;
     memset(s->usbip_in_pending, 0, sizeof(s->usbip_in_pending));
     memset(s->usbip_in_ep_armed, 0, sizeof(s->usbip_in_ep_armed));
-    memset(s->usbip_in_last_txsize, 0xff, sizeof(s->usbip_in_last_txsize));
-    memset(s->usbip_in_last_dma, 0xff, sizeof(s->usbip_in_last_dma));
+    memset(s->usbip_in_ep_xfercompl_pending, 0, sizeof(s->usbip_in_ep_xfercompl_pending));
+    memset(s->usbip_in_dma_fresh, 0, sizeof(s->usbip_in_dma_fresh));
+    memset(s->usbip_in_tsiz_fresh, 0, sizeof(s->usbip_in_tsiz_fresh));
 }
 #define usbip_disconnect(s) usbip_disconnect_impl(s, __func__)
 
@@ -310,9 +311,6 @@ static void usbip_maybe_arm_fd(S5L8702UsbOtgState *s)
     if (s->usbip_ep0_pending || s->usbip_inep_active) return; /* transfer in flight */
 
     qemu_set_fd_handler(s->usbip_client_fd, usbip_client_readable, NULL, s);
-    qemu_log_mask(LOG_UNIMP,
-        "USBIP: fd handler armed (phase=%d DOEPDMA=0x%08x)\n",
-        s->enumeration_phase, s->out_eps[0].dma_address);
 }
 
 /* Handle CMD_SUBMIT for EP0 (control transfer).
@@ -368,8 +366,8 @@ static void usbip_handle_ep0_submit(S5L8702UsbOtgState *s,
     qemu_set_fd_handler(fd, NULL, NULL, NULL);
 
     qemu_log_mask(LOG_UNIMP,
-        "USBIP: EP0 SETUP injected at 0x%08x d2h=%d setup=%02x%02x%02x%02x%02x%02x%02x%02x\n",
-        s->out_eps[0].dma_address, d2h,
+        "USBIP: EP0 SETUP %s %02x%02x%02x%02x%02x%02x%02x%02x\n",
+        d2h ? "d2h" : "h2d",
         cmd->setup[0], cmd->setup[1], cmd->setup[2], cmd->setup[3],
         cmd->setup[4], cmd->setup[5], cmd->setup[6], cmd->setup[7]);
 
@@ -417,9 +415,7 @@ static void usbip_handle_out_submit(S5L8702UsbOtgState *s,
         return;
     }
 
-    qemu_log_mask(LOG_UNIMP,
-        "USBIP: OUT EP%u: wrote %u bytes to 0x%08x, fired XferCompl\n",
-        ep, buf_len, s->out_eps[ep].dma_address);
+    qemu_log_mask(LOG_UNIMP, "USBIP: OUT EP%u ←host %u bytes\n", ep, buf_len);
 
     s5l8702_usbotg_update_irq(s);
 }
@@ -429,7 +425,8 @@ static void usbip_handle_out_submit(S5L8702UsbOtgState *s,
  * Otherwise defer until firmware arms (detected in in_ep_write). */
 static void usbip_handle_in_submit(S5L8702UsbOtgState *s,
                                     const usbip_header_t *hdr,
-                                    uint32_t ep)
+                                    uint32_t ep,
+                                    uint32_t buf_len)
 {
     if (ep >= USB_NUM_ENDPOINTS) {
         qemu_log_mask(LOG_UNIMP, "USBIP: IN request for invalid EP%u\n", ep);
@@ -443,33 +440,46 @@ static void usbip_handle_in_submit(S5L8702UsbOtgState *s,
     }
 
     if (s->usbip_in_ep_armed[ep]) {
-        /* Firmware already prepared data — fulfill immediately */
-        uint32_t len = s->in_eps[ep].tx_size & 0x7ffff;
+        /* Firmware already armed the endpoint with fresh DMA data.
+         * usbip_in_ep_armed is only set when DIEPDMA was freshly written,
+         * so the buffer at dma_address is current. Fulfill immediately. */
+        uint32_t dev_len = s->in_eps[ep].tx_size & 0x7ffff;
+        uint32_t len = (buf_len && buf_len < dev_len) ? buf_len : dev_len;
         if (len > 65536) len = 65536;
         uint8_t *data = g_malloc0(len + 1);
         cpu_physical_memory_read(s->in_eps[ep].dma_address, data, len);
         qemu_log_mask(LOG_UNIMP,
-            "USBIP: IN EP%u immediate fulfil: %u bytes from 0x%08x\n",
-            ep, len, s->in_eps[ep].dma_address);
+            "USBIP: IN EP%u →host %u bytes [imm]\n", ep, len);
         usbip_send_ret_submit(s, hdr->seqnum, data, len);
         g_free(data);
+
+        /* Update tx_size (XferSize bits 18:0, PktCnt bits 28:19) and dma_address */
+        uint32_t xfer_size = (s->in_eps[ep].tx_size & 0x7ffff);
+        uint32_t pkt_cnt = (s->in_eps[ep].tx_size >> 19) & 0x3ff;
+        if (len >= xfer_size) {
+            xfer_size = 0;
+        } else {
+            xfer_size -= len;
+        }
+        if (pkt_cnt > 0) pkt_cnt--;
+        s->in_eps[ep].tx_size = (s->in_eps[ep].tx_size & ~0x1fffffff) | xfer_size | (pkt_cnt << 19);
+        s->in_eps[ep].dma_address += len;
+
         s->usbip_in_ep_armed[ep] = false;
-        s->usbip_in_last_txsize[ep] = s->in_eps[ep].tx_size;
-        s->usbip_in_last_dma[ep] = s->in_eps[ep].dma_address;
-        s->usbip_in_maint_xfercompl[ep] = false; /* reset for next cycle */
-        /* Fire XferCompl so firmware knows transfer completed */
+        /* Fire XferCompl — next ENABLE will be maintenance, skip it */
+        s->usbip_in_ep_xfercompl_pending[ep] = true;
         s->in_eps[ep].interrupt_status |= USB_EPINT_XferCompl;
+        /* Clear ENABLE bit — transfer is done */
+        s->in_eps[ep].control &= ~USB_EPCON_ENABLE;
         s5l8702_usbotg_update_irq(s);
-        /* fd handler stays armed — no need to pause */
         return;
     }
 
     s->usbip_in_pending[ep].pending = true;
     s->usbip_in_pending[ep].seqnum = hdr->seqnum;  /* verbatim */
+    s->usbip_in_pending[ep].buf_len = buf_len;
 
-    /* Do NOT disarm fd handler — bulk IN can coexist with EP0 requests */
-
-    qemu_log_mask(LOG_UNIMP, "USBIP: IN EP%u pending, waiting for firmware to arm EP\n", ep);
+    qemu_log_mask(LOG_UNIMP, "USBIP: IN EP%u pending (host wants %u bytes)\n", ep, buf_len);
 }
 
 static void usbip_handle_cmd_submit(S5L8702UsbOtgState *s, const usbip_header_t *hdr)
@@ -483,15 +493,12 @@ static void usbip_handle_cmd_submit(S5L8702UsbOtgState *s, const usbip_header_t 
     uint32_t direction = __builtin_bswap32(hdr->direction);
     uint32_t buf_len   = __builtin_bswap32(cmd.transfer_buffer_length);
 
-    qemu_log_mask(LOG_UNIMP, "USBIP: CMD_SUBMIT ep=%u dir=%u len=%u\n",
-                  ep, direction, buf_len);
-
     if (ep == 0) {
         usbip_handle_ep0_submit(s, hdr, &cmd);
     } else if (direction == 0) {
         usbip_handle_out_submit(s, hdr, &cmd, ep);
     } else {
-        usbip_handle_in_submit(s, hdr, ep);
+        usbip_handle_in_submit(s, hdr, ep, buf_len);
     }
 }
 
@@ -502,15 +509,25 @@ static void usbip_handle_cmd_unlink(S5L8702UsbOtgState *s, const usbip_header_t 
     usbip_cmd_unlink_t cmd;
     if (!usbip_recv(fd, &cmd, sizeof(cmd))) { usbip_disconnect(s); return; }
 
-    qemu_log_mask(LOG_UNIMP, "USBIP: CMD_UNLINK seqnum=0x%x\n",
-                  __builtin_bswap32(hdr->seqnum));
+    uint32_t unlink_seqnum = cmd.unlink_seqnum; /* verbatim, big-endian */
+    qemu_log_mask(LOG_UNIMP, "USBIP: CMD_UNLINK seqnum=0x%x (target=0x%x)\n",
+                  __builtin_bswap32(hdr->seqnum),
+                  __builtin_bswap32(unlink_seqnum));
+
+    /* Clear any pending IN EP request that matches the unlinked seqnum */
+    for (int i = 0; i < USB_NUM_ENDPOINTS; i++) {
+        if (s->usbip_in_pending[i].pending &&
+            s->usbip_in_pending[i].seqnum == unlink_seqnum) {
+            s->usbip_in_pending[i].pending = false;
+        }
+    }
 
     usbip_header_t ret_hdr = {0};
     ret_hdr.command = __builtin_bswap32(USBIP_RET_UNLINK);
     ret_hdr.seqnum  = hdr->seqnum;   /* echo CMD_UNLINK's own seqnum */
 
     usbip_ret_unlink_t ret_body = {0};
-    /* status=0: success (URB already completed or not found) */
+    ret_body.status = __builtin_bswap32((uint32_t)-ECONNRESET); /* -104: URB was cancelled */
 
     usbip_send(fd, &ret_hdr, sizeof(ret_hdr));
     usbip_send(fd, &ret_body, sizeof(ret_body));
@@ -538,41 +555,22 @@ static void usbip_client_readable(void *opaque)
         }
 
         if (command == USBIP_OP_REQ_DEVLIST) {
-            qemu_log_mask(LOG_UNIMP, "USBIP: DEVLIST request\n");
             if (!usbip_send_devlist(s)) usbip_disconnect(s);
         } else if (command == USBIP_OP_REQ_IMPORT) {
             char bus_id[32] = {0};
             if (!usbip_recv(fd, bus_id, sizeof(bus_id))) { usbip_disconnect(s); return; }
-            qemu_log_mask(LOG_UNIMP, "USBIP: IMPORT request bus_id='%s'\n", bus_id);
             if (!usbip_send_import_reply(s)) { usbip_disconnect(s); return; }
             s->usbip_device_imported = true;
-            qemu_log_mask(LOG_UNIMP,
-                "USBIP: Device imported — USB/IP active, enumeration injection disabled\n");
-            /*
-             * The firmware must process ENUMDONE before it arms OUT EP0 with
-             * a valid DMA buffer.  Inject it now if we're already in the idle
-             * polling loop (phase 1), or let the DCTL write handler do it if
-             * the firmware hasn't connected yet (phase 0).
-             * DO NOT arm the fd handler yet — wait until firmware clears
-             * ENUMDONE so that DOEPDMA[0] is already set up.
-             */
+            qemu_log_mask(LOG_UNIMP, "USBIP: device imported (phase=%d)\n", s->enumeration_phase);
             if (s->enumeration_phase == 1) {
                 s->gintsts |= (1 << 13);  /* ENUMDONE */
                 s->enumeration_phase = 2;
-                qemu_log_mask(LOG_UNIMP, "USBIP: Injected ENUMDONE (firmware in polling loop)\n");
                 s5l8702_usbotg_update_irq(s);
-                /* fd handler armed when firmware clears ENUMDONE below */
             } else if (s->enumeration_phase >= 3) {
-                /* Firmware already processed ENUMDONE — reconnection case.
-                 * Try to arm immediately if DMA is set; if not, usbip_maybe_arm_fd
-                 * will fire when DOEPDMA[0] is next written. */
-                qemu_log_mask(LOG_UNIMP, "USBIP: Reconnect detected: phase=%d DOEPDMA=0x%08x\n",
-                              s->enumeration_phase, s->out_eps[0].dma_address);
                 usbip_maybe_arm_fd(s);
             }
-            /* phase 0: firmware not connected yet; ENUMDONE injected in DCTL handler */
         } else {
-            qemu_log_mask(LOG_UNIMP, "USBIP: Unknown pre-import command 0x%04x\n", command);
+            qemu_log_mask(LOG_UNIMP, "USBIP: unknown pre-import command 0x%04x\n", command);
             usbip_disconnect(s);
         }
     } else {
@@ -749,12 +747,8 @@ static void s5l8702_usbotg_update_irq(S5L8702UsbOtgState *s)
 
     /* Raise/lower IRQ based on interrupt status and mask */
     if ((s->pcgcctl & 3) == 0 && (s->gintmsk & s->gintsts)) {
-        qemu_log_mask(LOG_UNIMP, "USB: IRQ_RAISE - pending=0x%08x mask=0x%08x\n",
-                     s->gintsts, s->gintmsk);
         qemu_irq_raise(s->irq);
     } else {
-        qemu_log_mask(LOG_UNIMP, "USB: IRQ_LOWER - pcgcctl=0x%x pending=0x%08x mask=0x%08x\n",
-                     s->pcgcctl, s->gintsts, s->gintmsk);
         qemu_irq_lower(s->irq);
     }
 }
@@ -909,12 +903,7 @@ static uint64_t s5l8702_usbotg_read(void *opaque, hwaddr offset, unsigned size)
         case GINTSTS:
             val = s->gintsts;
             if (val != 0) {
-                qemu_log_mask(LOG_UNIMP, "USB: GINTSTS read = 0x%08x (RESET=%d ENUMDONE=%d OEP=%d INEP=%d)\n",
-                             (unsigned)val,
-                             !!(val & (1 << 12)),  /* RESET */
-                             !!(val & (1 << 13)),  /* ENUMDONE */
-                             !!(val & (1 << 19)),  /* OEP */
-                             !!(val & (1 << 18))); /* INEP */
+                /* GINTSTS polled frequently — not logged */
             }
             break;
         case DIEPMSK: val = s->diepmsk; break;
@@ -973,8 +962,6 @@ static uint64_t s5l8702_usbotg_read(void *opaque, hwaddr offset, unsigned size)
             qemu_log_mask(LOG_GUEST_ERROR, "USB: Unhandled read at offset 0x%x\n", (unsigned)offset);
             val = 0;
     }
-
-    qemu_log_mask(LOG_UNIMP, "USB READ [0x%03x] %s = 0x%08x\n", (unsigned)offset, offset_name(offset), (unsigned)val);
 
     return val;
 }
@@ -1045,11 +1032,6 @@ static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr
                     }
                 } else {
                     /* === USB/IP mode: fulfill pending IN requests ===  */
-                    qemu_log_mask(LOG_UNIMP,
-                        "USBIP: DIEPCTL%u ENABLE: ep0_pending=%d d2h=%d status_pending=%d in_pending=%d\n",
-                        ep, s->usbip_ep0_pending, s->usbip_ep0_d2h,
-                        s->usbip_ep0_status_pending,
-                        ep < USB_NUM_ENDPOINTS ? s->usbip_in_pending[ep].pending : -1);
                     if (ep == 0 && s->usbip_ep0_pending && s->usbip_ep0_d2h
                         && s->usbip_ep0_txsize_armed) {
                         /* d2h control transfer: read data from DIEPDMA[0], send RET_SUBMIT */
@@ -1061,13 +1043,18 @@ static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr
                         /* Patch descriptor for high-speed compatibility */
                         patch_descriptor_for_highspeed(data, len);
 
-                        qemu_log_mask(LOG_UNIMP,
-                            "USBIP: EP0 d2h fulfil: %u bytes from 0x%08x seqnum=0x%x\n",
-                            len, s->in_eps[0].dma_address, __builtin_bswap32(s->usbip_ep0_seqnum));
+                        qemu_log_mask(LOG_UNIMP, "USBIP: EP0 →host %u bytes [ctrl d2h]\n", len);
                         if (!usbip_send_ret_submit(s, s->usbip_ep0_seqnum, data, len)) {
                             usbip_disconnect(s);
                             return;
                         }
+
+                        /* Update tx_size (XferSize bits 6:0, PktCnt bits 20:19) and dma_address */
+                        uint32_t pkt_cnt = (s->in_eps[0].tx_size >> 19) & 0x3;
+                        if (pkt_cnt > 0) pkt_cnt--;
+                        s->in_eps[0].tx_size = (s->in_eps[0].tx_size & ~0x18007F) | (pkt_cnt << 19);
+                        s->in_eps[0].dma_address += len;
+
                         s->usbip_ep0_pending = false;
                         /* Fire INEP XferCompl so firmware clears it.
                          * Track that it's outstanding — the fd handler must not
@@ -1076,55 +1063,108 @@ static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr
                          * between the two clears trips the h2d case 0x08 path. */
                         s->usbip_inep_active = true;
                         s->in_eps[0].interrupt_status  |= USB_EPINT_XferCompl;
+                        /* Clear ENABLE bit — transfer is done */
+                        s->in_eps[0].control &= ~USB_EPCON_ENABLE;
                         /* Fire STATUS OUT XferCompl so firmware completes status stage. */
                         s->out_eps[0].interrupt_status |= USB_EPINT_XferCompl;
                         s->usbip_ep0_status_pending = true;
                         s5l8702_usbotg_update_irq(s);
-                    } else if (ep == 0 && s->usbip_ep0_pending && !s->usbip_ep0_d2h) {
+                        } else if (ep == 0 && s->usbip_ep0_pending && !s->usbip_ep0_d2h) {
                         /* h2d control: firmware enabling IN EP0 for ZLP status.
                          * Fire XferCompl; RET_SUBMIT sent when firmware clears it. */
                         s->in_eps[0].interrupt_status |= USB_EPINT_XferCompl;
+                        /* Clear ENABLE bit — transfer is done */
+                        s->in_eps[0].control &= ~USB_EPCON_ENABLE;
                         s5l8702_usbotg_update_irq(s);
-                    } else if (ep != 0) {
-                        /* Bulk/interrupt IN: check if this is a REAL transfer
-                         * or just endpoint maintenance (re-arm with same params).
-                         * Skip if DIEPTSIZ and DIEPDMA are unchanged from last fulfil. */
+                        }
+ else if (ep != 0) {
+                        /* Bulk/interrupt IN endpoint enabled by firmware.
+                         *
+                         * On real DWC2 hardware, ENABLE starts a DMA transfer.
+                         * XferCompl fires only AFTER the host polls with IN tokens
+                         * and actually receives the data.  We mirror this:
+                         *
+                         *  - If the host already sent CMD_SUBMIT (pending): the host
+                         *    is waiting for data, so fulfill now and fire XferCompl.
+                         *  - If no CMD_SUBMIT yet: mark armed.  When the host's
+                         *    CMD_SUBMIT arrives later, fulfill then.
+                         *
+                         * We never fire XferCompl without actually delivering data
+                         * to the host — doing so would desync the firmware's state
+                         * machine (it would think data was sent when it wasn't).
+                         */
                         uint32_t cur_txsize = s->in_eps[ep].tx_size;
                         uint32_t cur_dma = s->in_eps[ep].dma_address;
-                        bool is_new = (cur_txsize != s->usbip_in_last_txsize[ep] ||
-                                       cur_dma != s->usbip_in_last_dma[ep]);
-                        if (!is_new) {
-                            /* Maintenance ENABLE — give ONE free XferCompl so firmware
-                             * can complete cleanup, then stop to prevent infinite loop. */
-                            if (!s->usbip_in_maint_xfercompl[ep]) {
-                                s->usbip_in_maint_xfercompl[ep] = true;
+                        bool is_fresh = s->usbip_in_dma_fresh[ep] || s->usbip_in_tsiz_fresh[ep];
+
+                        if (is_fresh) {
+                            /* Real ENABLE with a freshly-written DIEPDMA or DIEPTSIZ — 
+                             * the buffer or size is current. Either fulfill an 
+                             * already-pending CMD_SUBMIT or arm for the next one. */
+                            s->usbip_in_dma_fresh[ep] = false;
+                            s->usbip_in_tsiz_fresh[ep] = false;
+                            s->usbip_in_ep_xfercompl_pending[ep] = false;
+
+                            if (s->usbip_in_pending[ep].pending) {
+                                /* CMD_SUBMIT already waiting — fulfill now. */
+                                uint32_t dev_len = cur_txsize & 0x7ffff;
+                                uint32_t host_len = s->usbip_in_pending[ep].buf_len;
+                                uint32_t len = (host_len && host_len < dev_len) ? host_len : dev_len;
+                                if (len > 65536) len = 65536;
+                                uint8_t *data = g_malloc0(len + 1);
+                                cpu_physical_memory_read(cur_dma, data, len);
+                                qemu_log_mask(LOG_UNIMP,
+                                    "USBIP: IN EP%u →host %u bytes [deferred]\n", ep, len);
+                                if (!usbip_send_ret_submit(s, s->usbip_in_pending[ep].seqnum, data, len)) {
+                                    g_free(data);
+                                    usbip_disconnect(s);
+                                    return;
+                                }
+                                g_free(data);
+
+                                /* Update tx_size (XferSize bits 18:0, PktCnt bits 28:19) and dma_address */
+                                uint32_t xfer_size = cur_txsize & 0x7ffff;
+                                uint32_t pkt_cnt = (cur_txsize >> 19) & 0x3ff;
+                                if (len >= xfer_size) {
+                                    xfer_size = 0;
+                                } else {
+                                    xfer_size -= len;
+                                }
+                                if (pkt_cnt > 0) pkt_cnt--;
+                                s->in_eps[ep].tx_size = (cur_txsize & ~0x1fffffff) | xfer_size | (pkt_cnt << 19);
+                                s->in_eps[ep].dma_address += len;
+
+                                s->usbip_in_pending[ep].pending = false;
+                                s->usbip_in_ep_armed[ep] = false;
+                                /* Fire XferCompl — next ENABLE will be maintenance, skip it */
+                                s->usbip_in_ep_xfercompl_pending[ep] = true;
                                 s->in_eps[ep].interrupt_status |= USB_EPINT_XferCompl;
+                                /* Clear ENABLE bit — transfer is done */
+                                s->in_eps[ep].control &= ~USB_EPCON_ENABLE;
                                 s5l8702_usbotg_update_irq(s);
+                            } else {
+                                /* No CMD_SUBMIT yet — arm.  When CMD_SUBMIT arrives
+                                 * it can fulfill immediately. */
+                                s->usbip_in_ep_armed[ep] = true;
+                                qemu_log_mask(LOG_UNIMP,
+                                    "USBIP: IN EP%u armed (%u bytes)\n",
+                                    ep, cur_txsize & 0x7ffff);
                             }
-                        } else if (s->usbip_in_pending[ep].pending) {
-                            /* CMD_SUBMIT already waiting — fulfill now */
-                            uint32_t len = cur_txsize & 0x7ffff;
-                            if (len > 65536) len = 65536;
-                            uint8_t *data = g_malloc0(len + 1);
-                            cpu_physical_memory_read(cur_dma, data, len);
-                            qemu_log_mask(LOG_UNIMP,
-                                "USBIP: IN EP%u fulfil: %u bytes from 0x%08x\n",
-                                ep, len, cur_dma);
-                            usbip_send_ret_submit(s, s->usbip_in_pending[ep].seqnum, data, len);
-                            g_free(data);
-                            s->usbip_in_pending[ep].pending = false;
-                            s->usbip_in_last_txsize[ep] = cur_txsize;
-                            s->usbip_in_last_dma[ep] = cur_dma;
-                            s->usbip_in_maint_xfercompl[ep] = false; /* reset for next cycle */
-                            /* Fire XferCompl so firmware knows transfer completed */
+                        } else if (s->usbip_in_ep_xfercompl_pending[ep]) {
+                            /* Maintenance re-arm: firmware re-enables the endpoint
+                             * inside its XferCompl interrupt handler before updating
+                             * the DMA buffer.  The firmware requires another XferCompl
+                             * here to advance its state machine. Fire XferCompl 
+                             * but do NOT fulfill any CMD_SUBMIT. */
+                            s->usbip_in_ep_xfercompl_pending[ep] = false;
                             s->in_eps[ep].interrupt_status |= USB_EPINT_XferCompl;
+                            /* Clear ENABLE bit — maintenance is done */
+                            s->in_eps[ep].control &= ~USB_EPCON_ENABLE;
                             s5l8702_usbotg_update_irq(s);
-                        } else {
-                            /* No CMD_SUBMIT yet — mark armed for later */
-                            s->usbip_in_ep_armed[ep] = true;
                             qemu_log_mask(LOG_UNIMP,
-                                "USBIP: IN EP%u armed (no pending): %u bytes at 0x%08x\n",
-                                ep, cur_txsize & 0x7ffff, cur_dma);
+                                "USBIP: IN EP%u ENABLE maintenance: dummy XferCompl fired\n", ep);
+                        } else {
+                            /* ENABLE without a fresh DIEPDMA/DIEPTSIZ write — ignore. */
                         }
                     }
                 }
@@ -1169,18 +1209,12 @@ static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr
                          * if the STATUS OUT XferCompl has already been cleared; otherwise
                          * leave it for out_ep_write to do when that happens. */
                         s->usbip_inep_active = false;
-                        qemu_log_mask(LOG_UNIMP,
-                            "USBIP: DIEPINT[0] d2h clear: status_pending=%d\n",
-                            s->usbip_ep0_status_pending);
                         if (!s->usbip_ep0_status_pending && s->usbip_client_fd >= 0) {
                             qemu_set_fd_handler(s->usbip_client_fd,
                                                 usbip_client_readable, NULL, s);
                         }
                     } else if (s->usbip_ep0_pending && !s->usbip_ep0_d2h) {
                         /* h2d control transfer: firmware cleared ZLP IN XferCompl */
-                        qemu_log_mask(LOG_UNIMP,
-                            "USBIP: EP0 h2d ZLP IN cleared, sending RET_SUBMIT seqnum=0x%x\n",
-                            __builtin_bswap32(s->usbip_ep0_seqnum));
                         if (!usbip_send_ret_submit(s, s->usbip_ep0_seqnum, NULL, 0)) {
                             usbip_disconnect(s);
                             return;
@@ -1197,6 +1231,10 @@ static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr
             break;
         case 0x10:
             s->in_eps[ep].tx_size = val;
+            if (ep != 0) {
+                s->usbip_in_tsiz_fresh[ep] = true;
+                qemu_log_mask(LOG_UNIMP, "USBIP: IN EP%u DIEPTSIZ=0x%08x (fresh)\n", ep, val);
+            }
             /* Track that firmware wrote DIEPTSIZ[0] — real transfer setup */
             if (ep == 0 && s->usbip_ep0_pending && s->usbip_ep0_d2h) {
                 s->usbip_ep0_txsize_armed = true;
@@ -1204,6 +1242,10 @@ static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr
             break;
         case 0x14:
             s->in_eps[ep].dma_address = val;
+            if (ep != 0) {
+                s->usbip_in_dma_fresh[ep] = true;
+                qemu_log_mask(LOG_UNIMP, "USBIP: IN EP%u DIEPDMA=0x%08x (fresh)\n", ep, val);
+            }
             break;
         case 0x1C:
             s->in_eps[ep].dma_buffer = val;
@@ -1236,18 +1278,10 @@ static void s5l8702_usbotg_out_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwadd
             if (ep == 0 && (val & USB_EPINT_XferCompl)) {
                 if (s->usbip_device_imported && s->usbip_ep0_status_pending) {
                     s->usbip_ep0_status_pending = false;
-                    qemu_log_mask(LOG_UNIMP,
-                        "USBIP: DOEPINT[0] STATUS OUT cleared: inep_active=%d phase=%d\n",
-                        s->usbip_inep_active, s->enumeration_phase);
                     if (!s->usbip_inep_active && s->usbip_client_fd >= 0) {
                         qemu_set_fd_handler(s->usbip_client_fd,
                                             usbip_client_readable, NULL, s);
                     }
-                } else if (!s->usbip_device_imported) {
-                    /* Standalone mode: STATUS OUT cleared during enumeration */
-                    qemu_log_mask(LOG_UNIMP,
-                        "USB: DOEPINT[0] STATUS OUT cleared (phase%d)\n",
-                        s->enumeration_phase);
                 }
             }
             s5l8702_usbotg_update_irq(s);
@@ -1276,8 +1310,6 @@ static void s5l8702_usbotg_write(void *opaque, hwaddr offset, uint64_t val, unsi
 {
     S5L8702UsbOtgState *s = S5L8702_USBOTG(opaque);
     uint32_t value = (uint32_t)val;
-
-    qemu_log_mask(LOG_UNIMP, "USB WRITE [0x%03x] %s = 0x%08x\n", (unsigned)offset, offset_name(offset), (unsigned)value);
 
     switch (offset) {
         case PCGCCTL:
@@ -1340,8 +1372,6 @@ static void s5l8702_usbotg_write(void *opaque, hwaddr offset, uint64_t val, unsi
                      */
                     s->enumeration_phase = 3;  /* "USB/IP ready" */
                     usbip_maybe_arm_fd(s);
-                    qemu_log_mask(LOG_UNIMP,
-                        "USBIP: Firmware processed ENUMDONE (phase=3), fd handler armed conditionally\n");
                 }
             }
             s->gintsts &= ~value;
@@ -1404,15 +1434,12 @@ static void s5l8702_usbotg_write(void *opaque, hwaddr offset, uint64_t val, unsi
                     /* Re-arm fd handler after reset — client is waiting for us */
                     if (s->usbip_client_fd >= 0) {
                         qemu_set_fd_handler(s->usbip_client_fd, usbip_client_readable, NULL, s);
-                        qemu_log_mask(LOG_UNIMP, "USBIP: fd re-armed after reset\n");
                     }
-                    qemu_log_mask(LOG_UNIMP,
-                        "USB: DCTL=0x%x connected + USB/IP active, injecting ENUMDONE\n", value);
+                    qemu_log_mask(LOG_UNIMP, "USB: connected + USB/IP active, injecting ENUMDONE\n");
                     s5l8702_usbotg_update_irq(s);
                 } else {
                     s->enumeration_phase = 1;
-                    qemu_log_mask(LOG_UNIMP,
-                        "USB: DCTL=0x%x (connected), phase=1 — will inject ENUMDONE\n", value);
+                    qemu_log_mask(LOG_UNIMP, "USB: connected, phase=1 — will inject ENUMDONE\n");
                 }
             }
 
@@ -1564,9 +1591,9 @@ static void s5l8702_usbotg_reset(DeviceState *dev)
     s->usbip_ep0_txsize_armed = false;
     memset(s->usbip_in_pending, 0, sizeof(s->usbip_in_pending));
     memset(s->usbip_in_ep_armed, 0, sizeof(s->usbip_in_ep_armed));
-    memset(s->usbip_in_last_txsize, 0xff, sizeof(s->usbip_in_last_txsize));
-    memset(s->usbip_in_last_dma, 0xff, sizeof(s->usbip_in_last_dma));
-    memset(s->usbip_in_maint_xfercompl, 0, sizeof(s->usbip_in_maint_xfercompl));
+    memset(s->usbip_in_ep_xfercompl_pending, 0, sizeof(s->usbip_in_ep_xfercompl_pending));
+    memset(s->usbip_in_dma_fresh, 0, sizeof(s->usbip_in_dma_fresh));
+    memset(s->usbip_in_tsiz_fresh, 0, sizeof(s->usbip_in_tsiz_fresh));
 
     /* Device starts in basic configured state
      * Firmware will override these values during initialization.
