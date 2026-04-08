@@ -2,6 +2,7 @@
 #include "hw/sysbus.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
+#include "hw/irq.h"
 
 #define TYPE_VIC_EDGE_GLUE "vic-edge-glue"
 #define VIC_EDGE_GLUE(obj) \

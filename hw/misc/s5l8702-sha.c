@@ -36,7 +36,7 @@ static uint64_t s5l8702_sha_read(void *opaque, hwaddr offset, unsigned size) {
         case SHA1OUT ... SHA1OUT + 16 * 4:
             if (!s->hash_computed) {
                 // lazy compute the final hash by inspecting the last eight bytes of the buffer, which contains the length of the input data.
-                uint64_t data_length = swapLong(((uint64_t *) s->buffer)[s->buffer_len / 8 - 1]) / 8;
+                uint64_t data_length = swapLong((void *)(uintptr_t)((uint64_t *) s->buffer)[s->buffer_len / 8 - 1]) / 8;
                 size_t hash_len;
                 Error** errp;
                 qcrypto_hash_bytes(QCRYPTO_HASH_ALG_SHA1, s->buffer, data_length, s->outbuf, &hash_len, errp);

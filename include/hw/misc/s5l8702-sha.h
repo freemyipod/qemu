@@ -3,7 +3,6 @@
 
 #include "qom/object.h"
 #include "hw/sysbus.h"
-#include <openssl/sha.h>
 
 #define TYPE_S5L8702_SHA    "s5l8702-sha"
 OBJECT_DECLARE_SIMPLE_TYPE(S5L8702ShaState, S5L8702_SHA)
