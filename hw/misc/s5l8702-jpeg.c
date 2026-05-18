@@ -183,25 +183,107 @@ static void s5l8702_jpeg_write(void *opaque, hwaddr offset,
         case JPEG_REG_QTABLE2 ... JPEG_REG_QTABLE2 + JPEG_QTABLE_LEN:
             s->qtable2[(offset - JPEG_REG_QTABLE2) / 4] = val;
             break;
-        case JPEG_REG_CTRL:
-            EncodedMCU *mcu = malloc(sizeof(EncodedMCU) * 300);
-            uint8_t *yplane = malloc(sizeof(uint8_t) * 320 * 240);
-            uint8_t *cbplane = malloc(sizeof(uint8_t) * 320 * 240);
-            uint8_t *crplane = malloc(sizeof(uint8_t) * 320 * 240);
+        case JPEG_REG_CTRL: {
+            /* On the very first trigger of a decode (no cached planes yet),
+             * run the full decode once and cache Y/Cb/Cr. Also write the
+             * full planes to the SW conversion buffer addresses (firmware
+             * reads from there). Each CTRL trigger then stages the
+             * "current" MCU's data into YPLANE/CBPLANE/CRPLANE staging so
+             * that the firmware's per-MCU gBS->CopyMem reads valid bytes
+             * for every MCU including the last. */
+            if (s->cached_yplane == NULL) {
+                EncodedMCU *mcu = malloc(sizeof(EncodedMCU) * 300);
+                s->cached_yplane = malloc(320 * 240);
+                s->cached_cbplane = malloc(160 * 120);
+                s->cached_crplane = malloc(160 * 120);
 
-            address_space_read(s->nsas, s->regs[JPEG_REG_COEFF_BLOCKS / 4], MEMTXATTRS_UNSPECIFIED, mcu,sizeof(EncodedMCU) * 300);
+                address_space_read(s->nsas, s->regs[JPEG_REG_COEFF_BLOCKS / 4],
+                                   MEMTXATTRS_UNSPECIFIED, mcu,
+                                   sizeof(EncodedMCU) * 300);
+                s5l8702_jpeg_decode(mcu, s->qtable1, s->qtable2,
+                                    s->cached_yplane, s->cached_cbplane,
+                                    s->cached_crplane);
 
-            s5l8702_jpeg_decode(mcu, s->qtable1, s->qtable2, yplane, cbplane, crplane);
+                /* Write the full planes to the SW conversion buffers. */
+                uint32_t base = s->regs[JPEG_REG_OUT_CRPLANE / 4] + 0x10000;
+                address_space_write(s->nsas, base, MEMTXATTRS_UNSPECIFIED,
+                                    s->cached_yplane, 320 * 240);
+                address_space_write(s->nsas, base + 0x12C00,
+                                    MEMTXATTRS_UNSPECIFIED,
+                                    s->cached_cbplane, 160 * 120);
+                address_space_write(s->nsas, base + 0x12C00 + 0x4B00,
+                                    MEMTXATTRS_UNSPECIFIED,
+                                    s->cached_crplane, 160 * 120);
+                free(mcu);
+            }
 
-            address_space_write(s->nsas, s->regs[JPEG_REG_OUT_CRPLANE / 4] + 0x10000, MEMTXATTRS_UNSPECIFIED, yplane,320 * 240);
-            address_space_write(s->nsas, s->regs[JPEG_REG_OUT_CRPLANE / 4] + 0x10000 + 0x12C00, MEMTXATTRS_UNSPECIFIED,cbplane, 160 * 120);
-            address_space_write(s->nsas, s->regs[JPEG_REG_OUT_CRPLANE / 4] + 0x10000 + 0x12C00 + 0x4B00,MEMTXATTRS_UNSPECIFIED, crplane, 160 * 120);
+            /* Stage the current MCU into YPLANE/CBPLANE/CRPLANE buffers in
+             * the layout the firmware's gBS->CopyMem reads:
+             *   YPLANE  : 8 rows of 32 bytes, top 8 luma rows (cols 0..15).
+             *   CBPLANE : 8 rows of 32 bytes, bottom 8 luma rows.
+             *   CRPLANE : 8 rows of 32 bytes, Cb at offset 0..7, Cr at 8..15.
+             * Each trigger restages the same MCU (idempotent). After 3
+             * triggers we advance to the next MCU. */
+            uint32_t mcu_idx = s->ctrl_trigger_count / 3;
+            if (mcu_idx >= 300) {
+                mcu_idx = 299;
+            }
+            uint32_t mc_col = mcu_idx % 20;
+            uint32_t mc_row = mcu_idx / 20;
 
-            free(mcu);
-            free(yplane);
-            free(cbplane);
-            free(crplane);
+            uint8_t y_stage[8 * 32];
+            uint8_t cb_stage[8 * 32];
+            uint8_t cr_stage[8 * 32];
+            memset(y_stage, 0, sizeof(y_stage));
+            memset(cb_stage, 0, sizeof(cb_stage));
+            memset(cr_stage, 0, sizeof(cr_stage));
+
+            for (int r = 0; r < 8; r++) {
+                for (int c = 0; c < 16; c++) {
+                    y_stage[r * 32 + c] =
+                        s->cached_yplane[(mc_row * 16 + r) * 320 +
+                                         mc_col * 16 + c];
+                    cb_stage[r * 32 + c] =
+                        s->cached_yplane[(mc_row * 16 + 8 + r) * 320 +
+                                         mc_col * 16 + c];
+                }
+                for (int c = 0; c < 8; c++) {
+                    cr_stage[r * 32 + c] =
+                        s->cached_cbplane[(mc_row * 8 + r) * 160 +
+                                          mc_col * 8 + c];
+                    cr_stage[r * 32 + 8 + c] =
+                        s->cached_crplane[(mc_row * 8 + r) * 160 +
+                                          mc_col * 8 + c];
+                }
+            }
+
+            address_space_write(s->nsas,
+                                s->regs[JPEG_REG_OUT_YPLANE / 4],
+                                MEMTXATTRS_UNSPECIFIED,
+                                y_stage, sizeof(y_stage));
+            address_space_write(s->nsas,
+                                s->regs[JPEG_REG_OUT_CBPLANE / 4],
+                                MEMTXATTRS_UNSPECIFIED,
+                                cb_stage, sizeof(cb_stage));
+            address_space_write(s->nsas,
+                                s->regs[JPEG_REG_OUT_CRPLANE / 4],
+                                MEMTXATTRS_UNSPECIFIED,
+                                cr_stage, sizeof(cr_stage));
+
+            s->ctrl_trigger_count++;
+            /* After all 300 MCUs * 3 triggers, free the cache and reset so
+             * a subsequent JPEG decode starts clean. */
+            if (s->ctrl_trigger_count >= 300 * 3) {
+                free(s->cached_yplane);
+                free(s->cached_cbplane);
+                free(s->cached_crplane);
+                s->cached_yplane = NULL;
+                s->cached_cbplane = NULL;
+                s->cached_crplane = NULL;
+                s->ctrl_trigger_count = 0;
+            }
             break;
+        }
 
         default:
             break;
