@@ -17,6 +17,7 @@ struct S5L8702AtaState {
 
     /*< public >*/
     MemoryRegion iomem;
+    qemu_irq irq;
     IDEBus bus;
     IDEDevice *device;
 

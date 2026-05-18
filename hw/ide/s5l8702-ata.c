@@ -533,15 +533,24 @@ void s5l8702_ata_set_drive_info(S5L8702AtaState *s, DriveInfo *i)
 
 static void s5l8702_ata_init(Object *obj)
 {
+    SysBusDevice *d = SYS_BUS_DEVICE(obj);
     S5L8702AtaState *s = S5L8702_ATA(obj);
 
     printf("s5l8702_ata_init\n");
 
     /* Memory mapping */
     memory_region_init_io(&s->iomem, OBJECT(s), &s5l8702_ata_ops, s, TYPE_S5L8702_ATA, S5L8702_ATA_SIZE);
-    sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
+    sysbus_init_mmio(d, &s->iomem);
+    sysbus_init_irq(d, &s->irq);
 
     ide_bus_init(&s->bus, sizeof(s->bus), DEVICE(obj), 0, 1);
+}
+
+static void s5l8702_ata_realize(DeviceState *dev, Error **errp)
+{
+    S5L8702AtaState *s = S5L8702_ATA(dev);
+
+    ide_bus_init_output_irq(&s->bus, s->irq);
 }
 
 static void s5l8702_ata_class_init(ObjectClass *klass, void *data)
@@ -550,6 +559,7 @@ static void s5l8702_ata_class_init(ObjectClass *klass, void *data)
 
     printf("s5l8702_ata_class_init\n");
 
+    dc->realize = s5l8702_ata_realize;
     dc->reset = s5l8702_ata_reset;
     set_bit(DEVICE_CATEGORY_STORAGE, dc->categories);
 }
