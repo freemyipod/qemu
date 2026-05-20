@@ -266,13 +266,25 @@ static uint32_t s5l8702_timer_get_cnt(S5L8702Timer *t) {
     return t->tcnt;
 }
 
+/*
+ * Free-running 1us counter exposed in the timer MMIO region at offset
+ * 0x10000. The Apple OF bootloader reads this to timestamp interrupt
+ * arrivals and to drive its software timeouts; if it never advances the
+ * boot stalls in an IRQ storm because no scheduled callback ever fires.
+ */
+#define S5L8702_TIMER_USEC          0x10000
+
 static uint64_t s5l8702_timer_read(void *opaque, hwaddr offset, unsigned size) {
     S5L8702TimerCtrlState *s = S5L8702_TIMER(opaque);
     uint32_t tidx = offset / 0x20;
-    if (tidx > S5L8702_TIMER_COUNT_16 + 1) tidx--; // 32-bit timers have a 0x20 offset
+    if (tidx >= S5L8702_TIMER_COUNT_16 + 1) tidx--; /* skip 0x80..0x9F gap before 32-bit block */
     S5L8702Timer *t = &s->timer[tidx];
     uint32_t r = 0;
     bool implemented = true;
+
+    if (offset == S5L8702_TIMER_USEC) {
+        return (uint32_t)(qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) / 1000ULL);
+    }
 
     switch (offset) {
     case S5L8702_TIMER_TCON_16(0):
@@ -365,7 +377,7 @@ static uint64_t s5l8702_timer_read(void *opaque, hwaddr offset, unsigned size) {
 static void s5l8702_timer_write(void *opaque, hwaddr offset, uint64_t val, unsigned size) {
     S5L8702TimerCtrlState *s = S5L8702_TIMER(opaque);
     uint32_t tidx = offset / 0x20;
-    if (tidx > S5L8702_TIMER_COUNT_16 + 1) tidx--; // 32-bit timers have a 0x20 offset
+    if (tidx >= S5L8702_TIMER_COUNT_16 + 1) tidx--; /* skip 0x80..0x9F gap before 32-bit block */
     S5L8702Timer *t = &s->timer[tidx];
 
     switch (offset) {
@@ -406,6 +418,20 @@ static void s5l8702_timer_write(void *opaque, hwaddr offset, uint64_t val, unsig
 
         /* Clear the status bits that the guest wrote a '1' to */
         new_tcon &= ~(val & w1c_mask);
+
+        /*
+         * For 32-bit timers the IRQ line is driven from TSTAT, not TCON.
+         * Mirror the TCON W1C clears into the corresponding TSTAT bits so
+         * that the IRQ actually goes low when the guest acknowledges via
+         * TCON (which the OF firmware does instead of writing TSTAT).
+         */
+        if (t->type == S5L8702_TIMER_TYPE_32) {
+            uint32_t idx   = tidx;
+            uint32_t shift = (idx == 4) ? 8 : (idx == 5) ? 16 : (idx == 6) ? 24 : 0;
+            if (val & S5L8702_TIMER_TCON_INT0) s->tstat &= ~(1u << shift);
+            if (val & S5L8702_TIMER_TCON_INT1) s->tstat &= ~(2u << shift);
+            if (val & S5L8702_TIMER_TCON_OVF)  s->tstat &= ~(4u << shift);
+        }
 
         /* Check if clock source or mode changed to reschedule */
         if ((new_tcon & S5L8702_TIMER_TCON_CS_MASK) != (t->tcon & S5L8702_TIMER_TCON_CS_MASK) ||
