@@ -122,22 +122,20 @@
 
 static uint8_t pcf5063x_read(Pcf5063xState *s, uint8_t addr)
 {
-    uint8_t r = 0;
+    uint8_t r;
 
     switch (addr) {
+    /* ADC status registers report "conversion done / value ready" so the
+     * firmware's polling loops complete. */
     case PCF5063X_ADCS1:
-        r = 0xFF;
-        break;
     case PCF5063X_ADCS3:
+    case PCF5063X_MBCS1:
         r = 0xFF;
         break;
     case PCF5063X_OOCSTAT:
         r = 0x00;
         break;
-    case PCF5063X_MBCS1:
-        r = 0xFF;
-        break;
-    // The following registers are read at the startup, INTX are just to clear them
+    /* Registers the firmware reads at startup; INTx are read to clear. */
     case PCF5063X_GPIO3CFG:
     case PCF5063X_OOCSHDWN:
     case PCF5063X_INT1:
@@ -146,15 +144,15 @@ static uint8_t pcf5063x_read(Pcf5063xState *s, uint8_t addr)
     case PCF5063X_INT4:
     case PCF5063X_INT5:
     case PCF50635_INT6:
+        r = s->regs[addr];
         break;
     default:
         trace_pcf5063x_unknown_read(addr);
+        r = s->regs[addr];
         break;
     }
 
-    r = s->regs[addr];
     trace_pcf5063x_read(addr, r);
-
     return r;
 }
 
