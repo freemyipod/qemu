@@ -60,6 +60,11 @@ struct S5L8702JpegState {
     uint32_t regs[0x396fffff - 0x39600000];
     uint32_t qtable1[64];
     uint32_t qtable2[64];
+
+    uint8_t *cached_yplane;
+    uint8_t *cached_cbplane;
+    uint8_t *cached_crplane;
+    uint32_t ctrl_trigger_count;
 };
 
 #endif /* HW_MISC_S5L8702_JPEG_H */

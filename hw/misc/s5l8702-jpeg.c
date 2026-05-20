@@ -150,8 +150,8 @@ static void s5l8702_jpeg_decode(EncodedMCU *mcu, uint32_t *qtable1, uint32_t *qt
 
 static uint64_t s5l8702_jpeg_read(void *opaque, hwaddr offset,
                                   unsigned size) {
-    const S5L8702JpegState *s = S5L8702_JPEG(opaque);
     uint32_t r = 0;
+    (void)opaque;
 
     switch (offset) {
         case JPEG_UNK1:
@@ -298,7 +298,7 @@ static const MemoryRegionOps s5l8702_jpeg_ops = {
 };
 
 static void s5l8702_jpeg_reset(DeviceState *dev) {
-    S5L8702JpegState *s = S5L8702_JPEG(dev);
+    (void)dev;
 
     trace_s5l8702_jpeg_reset();
 
