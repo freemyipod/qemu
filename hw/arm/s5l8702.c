@@ -111,8 +111,10 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
 
     /* Wiring: Glue Outputs -> VIC Inputs */
     for (int i = 0; i < 32; i++) {
-        qdev_connect_gpio_out(glue, i, qdev_get_gpio_in(s->vic0, i));
-        qdev_connect_gpio_out(glue, i + 32, qdev_get_gpio_in(s->vic1, i));
+        qdev_connect_gpio_out(glue, i,
+                              qdev_get_gpio_in(DEVICE(s->vic0), i));
+        qdev_connect_gpio_out(glue, i + 32,
+                              qdev_get_gpio_in(DEVICE(s->vic1), i));
     }
 
     /* CLK */
