@@ -154,15 +154,23 @@ static void s5l8702_i2c_write(void *opaque, hwaddr offset, uint64_t val, unsigne
     case S5L8702_I2C_IICCON:
     {
         trace_s5l8702_i2c_write("IICCON", (uint32_t) val);
-        
+
+        /*
+         * The IRQ flag in IICCON is write-1-to-acknowledge: when the guest
+         * writes a 1 to bit 4 with the IRQ pending, the controller clears
+         * the pending IRQ and advances the transfer (pushes the next
+         * IICDS or pulls the next byte in RX). Writes with bit 4 = 0 just
+         * update the other control bits.
+         */
         bool irq_was_pending = (s->iiccon & S5L8702_I2C_IICCON_IRQ) != 0;
-        bool irq_cleared_by_guest = irq_was_pending && ((val & S5L8702_I2C_IICCON_IRQ) == 0);
+        bool guest_acks = irq_was_pending &&
+                          ((val & S5L8702_I2C_IICCON_IRQ) != 0);
 
-        s->iiccon = ((uint32_t)val & ~S5L8702_I2C_IICCON_IRQ) | 
-                    (irq_cleared_by_guest ? 0 : (s->iiccon & S5L8702_I2C_IICCON_IRQ));
+        s->iiccon = ((uint32_t)val & ~S5L8702_I2C_IICCON_IRQ) |
+                    (guest_acks ? 0 : (s->iiccon & S5L8702_I2C_IICCON_IRQ));
 
-        if (irq_cleared_by_guest) {
-            s->iicstat2 &= ~BIT(8); // Keep Apple flag in sync
+        if (guest_acks) {
+            s->iicstat2 &= ~BIT(8); /* Keep transfer-done flag in sync */
             s5l8702_i2c_resume_transfer(s);
         }
         s5l8702_i2c_update_irq(s);
@@ -190,9 +198,16 @@ static void s5l8702_i2c_write(void *opaque, hwaddr offset, uint64_t val, unsigne
                     s->iicstat &= ~S5L8702_I2C_IICSTAT_MODE_LRB; // ACK
                 }
                 s->iicstat |= S5L8702_I2C_IICSTAT_MODE_BB; // Bus is busy
-                s->last_was_start = true;
-                /* Delay initial IRQ */
-                timer_mod(s->irq_timer, qemu_clock_get_us(QEMU_CLOCK_VIRTUAL) + 1);
+                /*
+                 * Hardware asserts IRQ immediately when the slave ACKs the
+                 * start. The OF firmware reads IICCON in tight sequence
+                 * with IICDS/IICSTAT2 writes and expects the IRQ to be
+                 * pending by the time it acks via IICCON, so don't gate
+                 * the assertion on a virtual-time timer.
+                 */
+                s->iiccon |= S5L8702_I2C_IICCON_IRQ;
+                s->iicstat2 |= BIT(8) | BIT(11); // transfer-done + start flags
+                s5l8702_i2c_update_irq(s);
             }
             else if (mode == 0xB0) { // START RX
                 int ack = i2c_start_recv(s->bus, ((uint8_t) s->iicds) >> 1);
@@ -204,9 +219,9 @@ static void s5l8702_i2c_write(void *opaque, hwaddr offset, uint64_t val, unsigne
                     s->rx_shift_register = i2c_recv(s->bus);
                 }
                 s->iicstat |= S5L8702_I2C_IICSTAT_MODE_BB; // Bus is busy
-                s->last_was_start = true;
-                /* Delay initial IRQ */
-                timer_mod(s->irq_timer, qemu_clock_get_us(QEMU_CLOCK_VIRTUAL) + 1);
+                s->iiccon |= S5L8702_I2C_IICCON_IRQ;
+                s->iicstat2 |= BIT(8) | BIT(11);
+                s5l8702_i2c_update_irq(s);
             }
             else if (mode == 0xD0) { // STOP TX
                 i2c_end_transfer(s->bus);
@@ -244,16 +259,19 @@ static void s5l8702_i2c_write(void *opaque, hwaddr offset, uint64_t val, unsigne
     case S5L8702_I2C_IICSTAT2:
     {
         trace_s5l8702_i2c_write("IICSTAT2", (uint32_t) val);
-        bool irq_was_pending = (s->iicstat2 & BIT(8)) != 0;
-        
-        s->iicstat2 &= ~(uint32_t) val; 
 
-        // If the guest clears bit 8, sync legacy registers and RESUME TRANSFER!
-        if (irq_was_pending && ((s->iicstat2 & BIT(8)) == 0)) {
-            s->iiccon &= ~S5L8702_I2C_IICCON_IRQ; 
-            s5l8702_i2c_resume_transfer(s);
-        }
-        
+        /*
+         * IICSTAT2 is a write-1-to-clear status mirror that the OF
+         * firmware writes between IICSTAT and IICDS to clear the previous
+         * transfer's flags. It must NOT trigger resume_transfer here:
+         *   - At this point IICDS still holds the previous byte (the
+         *     slave address), so sending it as data would corrupt the
+         *     transfer (slave treats it as a register index).
+         *   - It must NOT clear IICCON's IRQ either, because the firmware
+         *     subsequently acks via IICCON, and that's where the next
+         *     IICDS is pushed.
+         */
+        s->iicstat2 &= ~(uint32_t) val;
         s5l8702_i2c_update_irq(s);
         break;
     }
