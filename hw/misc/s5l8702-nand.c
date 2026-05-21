@@ -431,14 +431,14 @@ static void s5l8702_nand_realize(DeviceState *dev, Error **errp) {
     }
 
     for (int i = 0; i < NAND_NUM_BANKS; i++) {
-        char *path = g_strdup_printf("%s/nand-dump-bank%d.bin", s->nand_path, i);
+        char *path = g_strdup_printf("%s/bank%d.bin", s->nand_path, i);
         s->nand_banks[i] = cow_open(path);
         if (!s->nand_banks[i]) {
             warn_report("s5l8702-nand: could not open %s", path);
         }
         g_free(path);
 
-        char *spare_path = g_strdup_printf("%s/nand-dump-bank%d-spare.bin", s->nand_path, i);
+        char *spare_path = g_strdup_printf("%s/spare%d.bin", s->nand_path, i);
         s->nand_spares[i] = cow_open(spare_path);
         if (!s->nand_spares[i]) {
             warn_report("s5l8702-nand: could not open %s", spare_path);

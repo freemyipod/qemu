@@ -15,7 +15,7 @@ typedef struct cow_file cow_file;
 #define NAND_BYTES_PER_SPARE    64
 
 #define NAND_CHIP_ID            0xA5D5D589
-#define NAND_NUM_BANKS_INSTALLED 4
+#define NAND_NUM_BANKS_INSTALLED 2
 
 /* NAND register offsets within the 0x38A00000 MMIO region */
 #define NAND_FMCTRL0    0x0
