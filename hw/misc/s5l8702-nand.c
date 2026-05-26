@@ -189,8 +189,9 @@ void s5l8702_nand_set_buffered_page(S5L8702NandState *s, uint32_t page) {
     }
 
     if ((uint32_t)bank != s->buffered_bank || page != s->buffered_page) {
-        cow_read(s->nand_banks[bank], s->page_buffer, page * NAND_BYTES_PER_PAGE, NAND_BYTES_PER_PAGE);
-        cow_read(s->nand_spares[bank], s->page_spare_buffer.bytes, page * 16, 12);
+        cow_read(s->nand_banks[bank], s->page_buffer, (uint64_t)page * NAND_BYTES_PER_PAGE, NAND_BYTES_PER_PAGE);
+        cow_read(s->nand_spares[bank], s->page_spare_buffer.bytes, (uint64_t)page * 16, 12);
+
         s->buffered_page = page;
         s->buffered_bank = bank;
     }
@@ -227,7 +228,34 @@ static uint64_t nand_mem_read(void *opaque, hwaddr addr, unsigned size) {
             uint32_t page = (s->fmaddr1 << 16) | (s->fmaddr0 >> 16);
             trace_s5l8702_nand_read_page(get_bank(s), page, s->destaddr);
             s5l8702_nand_set_buffered_page(s, page);
-            address_space_write(&address_space_memory, s->destaddr ^ 0x80000000, MEMTXATTRS_UNSPECIFIED, s->page_buffer, NAND_BYTES_PER_PAGE);
+
+            /* Scatter the page across the queued 2 KiB-sector destinations.
+             * The firmware programs one DESTADDR per sector we must write 
+             * each sector to its own target rather than dumping the whole
+             * page on the last one. */
+            const uint32_t sector = 0x800;
+            uint32_t n = s->destaddr_queue_count;
+            if (n == 0) {
+                /* No queued targets (e.g. a single-sector part that didn't
+                 * re-arm): fall back to the last DESTADDR. */
+                s->destaddr_queue[0] = s->destaddr;
+                n = 1;
+            }
+            for (uint32_t i = 0; i < n; i++) {
+                uint32_t off = i * sector;
+                if (off >= NAND_BYTES_PER_PAGE) {
+                    break;
+                }
+                uint32_t len = sector;
+                if (off + len > NAND_BYTES_PER_PAGE) {
+                    len = NAND_BYTES_PER_PAGE - off;
+                }
+                address_space_write(&address_space_memory,
+                                    s->destaddr_queue[i] ^ 0x80000000,
+                                    MEMTXATTRS_UNSPECIFIED,
+                                    s->page_buffer + off, len);
+            }
+            s->destaddr_queue_count = 0;
             trace_s5l8702_nand_reg_fifo_spare(0, s->page_spare_buffer.words[0]);
             return s->page_spare_buffer.words[0];
         }
@@ -266,9 +294,20 @@ static uint64_t nand_mem_read(void *opaque, hwaddr addr, unsigned size) {
         return 0;
 
     case 0xC30:
-        /* All-0xFF spare indicates no ECC error */
+        /* ECC/blank status. Report a page as blank (0x20000000) only when BOTH
+         * the spare and the data are all-0xFF, matching the rehost's blank check
+         * (page_is_blank(data) && page_is_blank(spare)). Checking spare alone
+         * mis-reports data-only pages (whose first spare bytes happen to be 0xFF)
+         * as erased, which diverges from the rehost during the firmware's
+         * VFL/FTL signature scan and makes the signature impossible to find. */
         for (uint32_t i = 0; i < 12; i++) {
             if (s->page_spare_buffer.bytes[i] != 0xFF) {
+                trace_s5l8702_nand_reg_ecc_status(0);
+                return 0;
+            }
+        }
+        for (uint32_t i = 0; i < NAND_BYTES_PER_PAGE; i++) {
+            if (s->page_buffer[i] != 0xFF) {
                 trace_s5l8702_nand_reg_ecc_status(0);
                 return 0;
             }
@@ -346,9 +385,10 @@ static void nand_mem_write(void *opaque, hwaddr addr, uint64_t val, unsigned siz
             /* Page write complete – flush to cow file */
             qemu_mutex_lock(&s->lock);
             if (s->nand_banks[s->buffered_bank]) {
+                printf("[NAND] Writing page: bank=%d, page=0x%x\n", s->buffered_bank, s->buffered_page);
                 cow_write(s->nand_banks[s->buffered_bank],
                           s->page_buffer,
-                          s->buffered_page * NAND_BYTES_PER_PAGE,
+                          (uint64_t)s->buffered_page * NAND_BYTES_PER_PAGE,
                           NAND_BYTES_PER_PAGE);
             }
             qemu_mutex_unlock(&s->lock);
@@ -357,6 +397,9 @@ static void nand_mem_write(void *opaque, hwaddr addr, uint64_t val, unsigned siz
 
     case NAND_DESTADDR:
         s->destaddr = val;
+        if (s->destaddr_queue_count < ARRAY_SIZE(s->destaddr_queue)) {
+            s->destaddr_queue[s->destaddr_queue_count++] = val;
+        }
         trace_s5l8702_nand_reg_destaddr_write(s->destaddr);
         break;
 
@@ -463,6 +506,7 @@ static void s5l8702_nand_reset(DeviceState *dev) {
     s->fmi_int       = 0;
     s->reading_spare = 0;
     s->buffered_page = -1;
+    s->destaddr_queue_count = 0;
 
     fmiss_vm_reset(&s->fmiss_vm, 0);
     

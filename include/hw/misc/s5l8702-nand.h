@@ -71,6 +71,12 @@ struct S5L8702NandState {
     uint32_t fmanum;
     uint32_t fmdnum;
     uint32_t destaddr;
+    /* The FMI scatters a page across several 2 KiB-sector destinations: the
+     * firmware pushes one DESTADDR per sector before issuing a single page
+     * read. Queue them so the read can deliver each sector to its own target
+     * (an 8 KiB page = 4 sectors). One entry == today's single-target read. */
+    uint32_t destaddr_queue[16];
+    uint32_t destaddr_queue_count;
     uint32_t rsctrl;
     uint32_t cmd;
 
