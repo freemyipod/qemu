@@ -36,9 +36,13 @@ typedef struct cow_file cow_file;
 #define FMI_START       0xC00
 #define FMI_DMEM        0xD00
 
-#define NAND_CMD_ID         0x90
-#define NAND_CMD_READ       0x30
-#define NAND_CMD_READSTATUS 0x70
+#define NAND_CMD_ID              0x90
+#define NAND_CMD_READ            0x30
+#define NAND_CMD_READSTATUS      0x70
+#define NAND_CMD_ERASE_CONFIRM   0xD0
+#define NAND_CMD_PROGRAM_SETUP   0x80
+#define NAND_CMD_PROGRAM_CONFIRM 0x10
+#define NAND_PAGES_PER_BLOCK 128
 
 #define S5L8702_NAND_BASE   0x38A00000
 #define S5L8702_NAND_SIZE   0x1000
@@ -96,6 +100,8 @@ struct S5L8702NandState {
     char     *nand_path;
     cow_file *nand_banks[NAND_NUM_BANKS];
     cow_file *nand_spares[NAND_NUM_BANKS];
+
+    bool fmiss_enable; // do we emulate the FMISS or paravirtualize it?
 
     fmiss_vm fmiss_vm;
 };

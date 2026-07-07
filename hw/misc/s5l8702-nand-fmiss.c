@@ -6,6 +6,7 @@
 #include "qemu/osdep.h"
 #include "hw/misc/s5l8702-nand-fmiss.h"
 #include "trace.h"
+#include "hw/hw.h"
 #include "exec/memory.h"
 #include "exec/address-spaces.h"
 

@@ -381,6 +381,14 @@ s5l8702_fmiss_store_mem(uint32_t addr_reg, uint32_t addr, uint32_t val_reg, uint
 s5l8702_fmiss_load_nand(uint32_t dst, uint32_t src, uint32_t val) "r%d <- *(nand+r%d)=0x%08x"
 s5l8702_fmiss_store_nand(uint32_t addr_reg, uint32_t val_reg, uint32_t addr, uint32_t val) "*(nand+r%d=0x%08x) <- r%d=0x%08x"
 
+# s5l8702-nand-fmiss-pv.c
+s5l8702_fmiss_pv_matched(const char *name, uint64_t hash) "matched program \"%s\" hash=0x%016" PRIx64
+s5l8702_fmiss_pv_unimplemented(uint64_t hash, uint32_t addr) "no paravirt handler for hash=0x%016" PRIx64 " program_addr=0x%08x"
+s5l8702_fmiss_pv_erase(uint32_t bank, uint32_t block) "bank=%d block=0x%08x"
+s5l8702_fmiss_pv_read(uint32_t bank, uint32_t page, uint32_t dest) "bank=%d page=0x%08x dest=0x%08x"
+s5l8702_fmiss_pv_write(uint32_t bank, uint32_t page, uint32_t src) "bank=%d page=0x%08x src=0x%08x"
+s5l8702_fmiss_pv_read_id(uint32_t bank, uint32_t id) "bank=%d id=0x%08x"
+
 # s5l8702-nand-ecc.c
 s5l8702_nand_ecc_init(void) "init"
 s5l8702_nand_ecc_reset(void) "reset"

@@ -11,6 +11,7 @@
 #include "file-cow.h"
 #include "hw/misc/s5l8702-nand.h"
 #include "hw/misc/s5l8702-nand-fmiss.h"
+#include "hw/misc/s5l8702-nand-fmiss-pv.h"
 #include "trace.h"
 #include "hw/hw.h"
 #include "hw/qdev-properties.h"
@@ -56,6 +57,78 @@ void s5l8702_nand_set_buffered_page(S5L8702NandState *s, uint32_t page) {
 static void s5l8702_nand_update_irq(S5L8702NandState *s) {
     /* If any interrupt flags are set, assert the IRQ. Otherwise, deassert. */
     qemu_set_irq(s->irq, s->fmi_int != 0);
+}
+
+static uint32_t s5l8702_nand_current_page(S5L8702NandState *s) {
+    return (s->fmaddr1 << 16) | (s->fmaddr0 >> 16);
+}
+
+static void s5l8702_nand_do_erase(S5L8702NandState *s) {
+    int bank = get_bank(s);
+    if (bank == -1 || !s->nand_banks[bank]) {
+        return;
+    }
+
+    uint32_t block = s->fmaddr0;
+    uint32_t page0 = block * NAND_PAGES_PER_BLOCK;
+
+    uint8_t erased_page[NAND_BYTES_PER_PAGE];
+    memset(erased_page, 0xff, sizeof(erased_page));
+    uint8_t erased_spare[12];
+    memset(erased_spare, 0xff, sizeof(erased_spare));
+
+    qemu_mutex_lock(&s->lock);
+    for (uint32_t i = 0; i < NAND_PAGES_PER_BLOCK; i++) {
+        cow_write(s->nand_banks[bank], erased_page, (uint64_t)(page0 + i) * NAND_BYTES_PER_PAGE, NAND_BYTES_PER_PAGE);
+        if (s->nand_spares[bank]) {
+            cow_write(s->nand_spares[bank], erased_spare, (uint64_t)(page0 + i) * 16, sizeof(erased_spare));
+        }
+    }
+    qemu_mutex_unlock(&s->lock);
+
+    if (s->buffered_bank == (uint32_t)bank &&
+        s->buffered_page >= page0 && s->buffered_page < page0 + NAND_PAGES_PER_BLOCK) {
+        s->buffered_page = -1;
+    }
+}
+
+static void s5l8702_nand_do_program(S5L8702NandState *s) {
+    int bank = get_bank(s);
+    if (bank == -1 || !s->nand_banks[bank]) {
+        s->destaddr_queue_count = 0;
+        return;
+    }
+
+    uint32_t page = s5l8702_nand_current_page(s);
+
+    const uint32_t sector = 0x800;
+    uint32_t n = s->destaddr_queue_count;
+    if (n == 0) {
+        s->destaddr_queue[0] = s->destaddr;
+        n = 1;
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        uint32_t off = i * sector;
+        if (off >= NAND_BYTES_PER_PAGE) {
+            break;
+        }
+        uint32_t len = sector;
+        if (off + len > NAND_BYTES_PER_PAGE) {
+            len = NAND_BYTES_PER_PAGE - off;
+        }
+        address_space_read(&address_space_memory, s->destaddr_queue[i] ^ 0x80000000, MEMTXATTRS_UNSPECIFIED, s->page_buffer + off, len);
+    }
+    s->destaddr_queue_count = 0;
+
+    qemu_mutex_lock(&s->lock);
+    cow_write(s->nand_banks[bank], s->page_buffer, (uint64_t)page * NAND_BYTES_PER_PAGE, NAND_BYTES_PER_PAGE);
+    if (s->nand_spares[bank]) {
+        cow_write(s->nand_spares[bank], s->page_spare_buffer.bytes, (uint64_t)page * 16, 12);
+    }
+    qemu_mutex_unlock(&s->lock);
+
+    s->buffered_bank = bank;
+    s->buffered_page = page;
 }
 
 static uint64_t nand_mem_read(void *opaque, hwaddr addr, unsigned size) {
@@ -222,6 +295,11 @@ static void nand_mem_write(void *opaque, hwaddr addr, uint64_t val, unsigned siz
 
     case NAND_CMD:
         s->cmd = val;
+        if (val == NAND_CMD_ERASE_CONFIRM) {
+            s5l8702_nand_do_erase(s);
+        } else if (val == NAND_CMD_PROGRAM_CONFIRM) {
+            s5l8702_nand_do_program(s);
+        }
         break;
 
     case NAND_FMDNUM:
@@ -231,6 +309,7 @@ static void nand_mem_write(void *opaque, hwaddr addr, uint64_t val, unsigned siz
         break;
 
     case NAND_FMFIFO:
+        s->page_spare_buffer.words[0] = val;
         if (!s->is_writing) {
             break;
         }
@@ -249,6 +328,14 @@ static void nand_mem_write(void *opaque, hwaddr addr, uint64_t val, unsigned siz
             }
             qemu_mutex_unlock(&s->lock);
         }
+        break;
+
+    case 0x64:
+        s->page_spare_buffer.words[1] = val;
+        break;
+
+    case 0x68:
+        s->page_spare_buffer.words[2] = val;
         break;
 
     case NAND_DESTADDR:
@@ -274,8 +361,17 @@ static void nand_mem_write(void *opaque, hwaddr addr, uint64_t val, unsigned siz
 
     case FMI_START:
         if (val == 0xfff5) {
-            fmiss_vm_reset(&s->fmiss_vm, s->fmi_program);
-            fmiss_vm_execute(&nand_fmiss_ops, opaque, &s->fmiss_vm);
+            if (s->fmiss_enable) {
+                fmiss_vm_reset(&s->fmiss_vm, s->fmi_program);
+                fmiss_vm_execute(&nand_fmiss_ops, opaque, &s->fmiss_vm);
+            } else {
+                FmissPvContext pv_ctx = {
+                    .opaque       = opaque,
+                    .ops          = &nand_fmiss_ops,
+                    .program_addr = s->fmi_program,
+                };
+                fmiss_pv_dispatch(&pv_ctx);
+            }
             s->fmi_int |= 1;
             s5l8702_nand_update_irq(s); // Raise the IRQ line
         }
@@ -371,6 +467,7 @@ static void s5l8702_nand_reset(DeviceState *dev) {
 
 static Property s5l8702_nand_properties[] = {
     DEFINE_PROP_STRING("nand-path", S5L8702NandState, nand_path),
+    DEFINE_PROP_BOOL("fmiss-enable", S5L8702NandState, fmiss_enable, false),
     DEFINE_PROP_END_OF_LIST(),
 };
 
