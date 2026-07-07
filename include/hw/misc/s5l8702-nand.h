@@ -6,6 +6,7 @@
 #include "hw/irq.h"
 #include "qemu/lockable.h"
 #include "exec/address-spaces.h"
+#include "hw/misc/s5l8702-nand-fmiss.h"
 
 /* Forward declaration – full definition is in file-cow.h (included by the .c) */
 typedef struct cow_file cow_file;
@@ -45,16 +46,7 @@ typedef struct cow_file cow_file;
 #define TYPE_S5L8702_NAND   "s5l8702-nand"
 OBJECT_DECLARE_SIMPLE_TYPE(S5L8702NandState, S5L8702_NAND)
 
-#define FMIVSS_DMEM_SIZE 32
 #define S5L8702_NAND_IRQ 54 // actually NAND CS IRQ, but nothing cares about NAND itself
-
-typedef struct {
-    uint32_t regs[8];
-    /* PC is an offset into the device's DMEM */
-    uint32_t pc;
-    uint32_t start_pc;
-    uint32_t dmem[FMIVSS_DMEM_SIZE];
-} fmiss_vm;
 
 struct S5L8702NandState {
     /*< private >*/

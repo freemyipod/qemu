@@ -52,6 +52,7 @@ softmmu_ss.add(when: 'CONFIG_S5L8702', if_true: files(
   's5l8702-jpeg.c',
   's5l8702-lcd.c',
   's5l8702-nand.c',
+  's5l8702-nand-fmiss.c',
   's5l8702-miu.c',
   's5l8702-nand-ecc.c',
   's5l8702-sha.c',
