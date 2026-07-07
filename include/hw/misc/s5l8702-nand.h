@@ -6,10 +6,8 @@
 #include "hw/irq.h"
 #include "qemu/lockable.h"
 #include "exec/address-spaces.h"
+#include "sysemu/block-backend.h"
 #include "hw/misc/s5l8702-nand-fmiss.h"
-
-/* Forward declaration – full definition is in file-cow.h (included by the .c) */
-typedef struct cow_file cow_file;
 
 #define NAND_NUM_BANKS          8
 #define NAND_BYTES_PER_PAGE     2048
@@ -17,6 +15,16 @@ typedef struct cow_file cow_file;
 
 #define NAND_CHIP_ID            0xA5D5D589
 #define NAND_NUM_BANKS_INSTALLED 2
+
+/* Unified backing-image geometry: banks and their spare bytes live
+ * interwoven in a single BlockBackend-backed image, one page's data
+ * immediately followed by its spare bytes (mirrors how a real NAND page's
+ * data + OOB area sit together). Fixed at compile time for now. */
+#define NAND_SPARE_STRIDE      16
+#define NAND_BANK_CAPACITY     (2ULL * 1024 * 1024 * 1024) /* page-data bytes per bank */
+#define NAND_PAGES_PER_BANK    (NAND_BANK_CAPACITY / NAND_BYTES_PER_PAGE)
+#define NAND_PAGE_RECORD_SIZE  (NAND_BYTES_PER_PAGE + NAND_SPARE_STRIDE)
+#define NAND_BANK_STRIDE       ((uint64_t)NAND_PAGES_PER_BANK * NAND_PAGE_RECORD_SIZE)
 
 /* NAND register offsets within the 0x38A00000 MMIO region */
 #define NAND_FMCTRL0    0x0
@@ -96,10 +104,9 @@ struct S5L8702NandState {
     bool     is_writing;
     QemuMutex lock;
 
-    /* nand_path is set as a qdev property; files are opened during realize */
-    char     *nand_path;
-    cow_file *nand_banks[NAND_NUM_BANKS];
-    cow_file *nand_spares[NAND_NUM_BANKS];
+    /* "drive" qdev property: the unified NAND image (all banks + spares
+     * interwoven). See NAND_BANK_STRIDE et al. */
+    BlockBackend *blk;
 
     bool fmiss_enable; // do we emulate the FMISS or paravirtualize it?
 

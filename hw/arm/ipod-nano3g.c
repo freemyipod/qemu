@@ -24,19 +24,6 @@ static void ipod_nano3g_set_bootrom_path(Object *obj, const char *value, Error *
     s->bootrom_path = g_strdup(value);
 }
 
-static char *ipod_nano3g_get_nand_path(Object *obj, Error **errp)
-{
-    IpodNano3gState *s = IPOD_NANO3G_MACHINE(obj);
-    return g_strdup(s->nand_path);
-}
-
-static void ipod_nano3g_set_nand_path(Object *obj, const char *value, Error **errp)
-{
-    IpodNano3gState *s = IPOD_NANO3G_MACHINE(obj);
-    g_free(s->nand_path);
-    s->nand_path = g_strdup(value);
-}
-
 static void ipod_nano3g_init(Object *obj)
 {
     MachineState *machine = MACHINE(obj);
@@ -49,10 +36,6 @@ static void ipod_nano3g_init(Object *obj)
         exit(1);
     }
 
-    if (!object_property_add_str(obj, "nand-path", ipod_nano3g_get_nand_path, ipod_nano3g_set_nand_path)) {
-        error_report("ipod_nano3g_init: failed to add nand-path property\n");
-        exit(1);
-    }
 }
 
 static void ipod_nano3g_key_event(void *opaque, int keycode) {
@@ -145,8 +128,11 @@ static void ipod_nano3g_machine_init(MachineState *machine)
 
     /* Initialize s5l8702 soc */
     object_initialize_child(OBJECT(s), "soc", &s->soc, TYPE_S5L8702);
-    if (s->nand_path) {
-        s->soc.nand.nand_path = g_strdup(s->nand_path);
+
+    // NAND drive must be attached before the SoC (and thus the NAND child device) is realized.
+    DriveInfo *nand_info = drive_get_by_index(IF_MTD, 1);
+    if (nand_info) {
+        qdev_prop_set_drive(DEVICE(&s->soc.nand), "drive", blk_by_legacy_dinfo(nand_info));
     }
     sysbus_realize(SYS_BUS_DEVICE(&s->soc), &error_fatal);
 
@@ -160,7 +146,7 @@ static void ipod_nano3g_machine_init(MachineState *machine)
     memory_region_init_alias(&s->dram_alias, OBJECT(s), "dram-alias", &s->dram, 0, machine->ram_size);
     memory_region_add_subregion(get_system_memory(), 0x88000000, &s->dram_alias);
 
-    /* Connect an SPI flash to SPI0 */
+    // Connect an SPI flash to SPI0. NOR uses IF_MTD index 0; NAND (above) uses IF_MTD index 1.
     DeviceState *flash_dev = qdev_new("sst25vf080b"); // According to https://freemyipod.org/wiki/Nano3g_3G
     DriveInfo *flash_info = drive_get_by_index(IF_MTD, 0);
     if (!flash_info) {

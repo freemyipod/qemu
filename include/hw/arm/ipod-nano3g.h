@@ -23,7 +23,6 @@ struct IpodNano3gState {
     D1671State d1671;
 
     char *bootrom_path;
-    char *nand_path;
 };
 
 #endif /* HW_ARM_IPOD_NANO3G_H */

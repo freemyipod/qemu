@@ -8,15 +8,16 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
-#include "file-cow.h"
 #include "hw/misc/s5l8702-nand.h"
 #include "hw/misc/s5l8702-nand-fmiss.h"
 #include "hw/misc/s5l8702-nand-fmiss-pv.h"
 #include "trace.h"
 #include "hw/hw.h"
 #include "hw/qdev-properties.h"
+#include "hw/qdev-properties-system.h"
 #include "exec/memory.h"
 #include "exec/address-spaces.h"
+#include "sysemu/block-backend.h"
 
 /* Forward declarations */
 static uint64_t nand_mem_read(void *opaque, hwaddr addr, unsigned size);
@@ -38,16 +39,29 @@ static int get_bank(S5L8702NandState *s) {
     return bank;
 }
 
+/* Offsets into the unified backing image: banks and their spare bytes are
+ * interwoven, one page's data immediately followed by its spare bytes. */
+static uint64_t nand_page_data_offset(uint32_t bank, uint32_t page) {
+    return (uint64_t)bank * NAND_BANK_STRIDE + (uint64_t)page * NAND_PAGE_RECORD_SIZE;
+}
+
+static uint64_t nand_page_spare_offset(uint32_t bank, uint32_t page) {
+    return nand_page_data_offset(bank, page) + NAND_BYTES_PER_PAGE;
+}
+
 void s5l8702_nand_set_buffered_page(S5L8702NandState *s, uint32_t page) {
     int bank = get_bank(s);
     if (bank == -1) {
         trace_s5l8702_nand_warn_no_bank(page, s->reading_multiple_pages);
         return;
     }
+    if (!s->blk || (uint32_t)bank >= NAND_NUM_BANKS_INSTALLED) {
+        return;
+    }
 
     if ((uint32_t)bank != s->buffered_bank || page != s->buffered_page) {
-        cow_read(s->nand_banks[bank], s->page_buffer, (uint64_t)page * NAND_BYTES_PER_PAGE, NAND_BYTES_PER_PAGE);
-        cow_read(s->nand_spares[bank], s->page_spare_buffer.bytes, (uint64_t)page * 16, 12);
+        blk_pread(s->blk, nand_page_data_offset(bank, page), NAND_BYTES_PER_PAGE, s->page_buffer, 0);
+        blk_pread(s->blk, nand_page_spare_offset(bank, page), 12, s->page_spare_buffer.bytes, 0);
 
         s->buffered_page = page;
         s->buffered_bank = bank;
@@ -65,24 +79,19 @@ static uint32_t s5l8702_nand_current_page(S5L8702NandState *s) {
 
 static void s5l8702_nand_do_erase(S5L8702NandState *s) {
     int bank = get_bank(s);
-    if (bank == -1 || !s->nand_banks[bank]) {
+    if (bank == -1 || !s->blk || (uint32_t)bank >= NAND_NUM_BANKS_INSTALLED) {
         return;
     }
 
     uint32_t block = s->fmaddr0;
     uint32_t page0 = block * NAND_PAGES_PER_BLOCK;
 
-    uint8_t erased_page[NAND_BYTES_PER_PAGE];
-    memset(erased_page, 0xff, sizeof(erased_page));
-    uint8_t erased_spare[12];
-    memset(erased_spare, 0xff, sizeof(erased_spare));
+    uint8_t erased_record[NAND_PAGE_RECORD_SIZE];
+    memset(erased_record, 0xff, sizeof(erased_record));
 
     qemu_mutex_lock(&s->lock);
     for (uint32_t i = 0; i < NAND_PAGES_PER_BLOCK; i++) {
-        cow_write(s->nand_banks[bank], erased_page, (uint64_t)(page0 + i) * NAND_BYTES_PER_PAGE, NAND_BYTES_PER_PAGE);
-        if (s->nand_spares[bank]) {
-            cow_write(s->nand_spares[bank], erased_spare, (uint64_t)(page0 + i) * 16, sizeof(erased_spare));
-        }
+        blk_pwrite(s->blk, nand_page_data_offset(bank, page0 + i), sizeof(erased_record), erased_record, 0);
     }
     qemu_mutex_unlock(&s->lock);
 
@@ -94,7 +103,7 @@ static void s5l8702_nand_do_erase(S5L8702NandState *s) {
 
 static void s5l8702_nand_do_program(S5L8702NandState *s) {
     int bank = get_bank(s);
-    if (bank == -1 || !s->nand_banks[bank]) {
+    if (bank == -1 || !s->blk || (uint32_t)bank >= NAND_NUM_BANKS_INSTALLED) {
         s->destaddr_queue_count = 0;
         return;
     }
@@ -121,10 +130,8 @@ static void s5l8702_nand_do_program(S5L8702NandState *s) {
     s->destaddr_queue_count = 0;
 
     qemu_mutex_lock(&s->lock);
-    cow_write(s->nand_banks[bank], s->page_buffer, (uint64_t)page * NAND_BYTES_PER_PAGE, NAND_BYTES_PER_PAGE);
-    if (s->nand_spares[bank]) {
-        cow_write(s->nand_spares[bank], s->page_spare_buffer.bytes, (uint64_t)page * 16, 12);
-    }
+    blk_pwrite(s->blk, nand_page_data_offset(bank, page), NAND_BYTES_PER_PAGE, s->page_buffer, 0);
+    blk_pwrite(s->blk, nand_page_spare_offset(bank, page), 12, s->page_spare_buffer.bytes, 0);
     qemu_mutex_unlock(&s->lock);
 
     s->buffered_bank = bank;
@@ -317,14 +324,11 @@ static void nand_mem_write(void *opaque, hwaddr addr, uint64_t val, unsigned siz
         s->fmdnum -= 4;
         if (s->fmdnum == 0) {
             s->is_writing = false;
-            /* Page write complete – flush to cow file */
+            /* Page write complete: flush to the backing image */
             qemu_mutex_lock(&s->lock);
-            if (s->nand_banks[s->buffered_bank]) {
+            if (s->blk && s->buffered_bank < NAND_NUM_BANKS_INSTALLED) {
                 printf("[NAND] Writing page: bank=%d, page=0x%x\n", s->buffered_bank, s->buffered_page);
-                cow_write(s->nand_banks[s->buffered_bank],
-                          s->page_buffer,
-                          (uint64_t)s->buffered_page * NAND_BYTES_PER_PAGE,
-                          NAND_BYTES_PER_PAGE);
+                blk_pwrite(s->blk, nand_page_data_offset(s->buffered_bank, s->buffered_page), NAND_BYTES_PER_PAGE, s->page_buffer, 0);
             }
             qemu_mutex_unlock(&s->lock);
         }
@@ -418,28 +422,15 @@ static void s5l8702_nand_init(Object *obj) {
 
 static void s5l8702_nand_realize(DeviceState *dev, Error **errp) {
     S5L8702NandState *s = S5L8702_NAND(dev);
-    trace_s5l8702_nand_realize(s->nand_path ? s->nand_path : "(none)");
+    trace_s5l8702_nand_realize(s->blk ? blk_name(s->blk) : "(none)");
 
-    if (!s->nand_path) {
-        /* No path provided – operate without backing files (stub mode) */
+    if (!s->blk) {
+        /* No drive attached: operate without backing storage (stub mode) */
         return;
     }
 
-    for (int i = 0; i < NAND_NUM_BANKS; i++) {
-        char *path = g_strdup_printf("%s/bank%d.bin", s->nand_path, i);
-        s->nand_banks[i] = cow_open(path);
-        if (!s->nand_banks[i]) {
-            warn_report("s5l8702-nand: could not open %s", path);
-        }
-        g_free(path);
-
-        char *spare_path = g_strdup_printf("%s/spare%d.bin", s->nand_path, i);
-        s->nand_spares[i] = cow_open(spare_path);
-        if (!s->nand_spares[i]) {
-            warn_report("s5l8702-nand: could not open %s", spare_path);
-        }
-        g_free(spare_path);
-    }
+    uint64_t perm = BLK_PERM_CONSISTENT_READ | (blk_supports_write_perm(s->blk) ? BLK_PERM_WRITE : 0);
+    if (blk_set_perm(s->blk, perm, BLK_PERM_ALL, errp) < 0) return;
 }
 
 static void s5l8702_nand_reset(DeviceState *dev) {
@@ -466,7 +457,7 @@ static void s5l8702_nand_reset(DeviceState *dev) {
 }
 
 static Property s5l8702_nand_properties[] = {
-    DEFINE_PROP_STRING("nand-path", S5L8702NandState, nand_path),
+    DEFINE_PROP_DRIVE("drive", S5L8702NandState, blk),
     DEFINE_PROP_BOOL("fmiss-enable", S5L8702NandState, fmiss_enable, false),
     DEFINE_PROP_END_OF_LIST(),
 };

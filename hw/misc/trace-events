@@ -344,7 +344,7 @@ s5l8702_clickwheel_reg_write(const char *reg, uint32_t val) "%s <- 0x%08x"
 
 # s5l8702-nand.c
 s5l8702_nand_init(void) "init"
-s5l8702_nand_realize(const char *path) "nand-path=%s"
+s5l8702_nand_realize(const char *drive) "drive=%s"
 s5l8702_nand_reset(void) "reset"
 s5l8702_nand_read(uint32_t addr, uint64_t val) "addr=0x%08x -> 0x%08" PRIx64
 s5l8702_nand_write(uint32_t addr, uint64_t val) "addr=0x%08x <- 0x%08" PRIx64
