@@ -209,10 +209,10 @@ struct S5L8702UsbOtgState {
     struct {
         bool pending;
         uint32_t seqnum;   /* verbatim from CMD_SUBMIT header, echoed in RET_SUBMIT */
-        uint32_t buf_len;  /* host's transfer_buffer_length — cap actual data to this */
+        uint32_t buf_len;  /* host's transfer_buffer_length - cap actual data to this */
     } usbip_in_pending[USB_NUM_ENDPOINTS];
 
-    /* Firmware armed IN EP but no CMD_SUBMIT yet — fulfill on arrival */
+    /* Firmware armed IN EP but no CMD_SUBMIT yet - fulfill on arrival */
     bool usbip_in_ep_armed[USB_NUM_ENDPOINTS];
 
     /* XferCompl fired but maintenance re-arm ENABLE not yet skipped.
@@ -221,13 +221,41 @@ struct S5L8702UsbOtgState {
      * ENABLE will have the real payload. */
     bool usbip_in_ep_xfercompl_pending[USB_NUM_ENDPOINTS];
 
-    /* DIEPDMA was written since last ENABLE — the DMA buffer is fresh.
+    /* DIEPDMA was written since last ENABLE - the DMA buffer is fresh.
      * Only ENABLEs with fresh DMA are eligible to arm/fulfill; others
      * (e.g. firmware maintaining endpoint during enumeration) are ignored. */
     bool usbip_in_dma_fresh[USB_NUM_ENDPOINTS];
 
-    /* DIEPTSIZ was written since last ENABLE — the transfer parameters are fresh. */
+    /* DIEPTSIZ was written since last ENABLE - the transfer parameters are fresh. */
     bool usbip_in_tsiz_fresh[USB_NUM_ENDPOINTS];
+
+    /* Pending OUT EP data: host sent host-to-device data but the firmware
+     * hasn't armed the endpoint yet.  The payload is buffered here and
+     * delivered (DMA write + XferCompl + RET_SUBMIT) once the firmware
+     * arms the EP.  Deferring RET_SUBMIT also flow-controls the host: it
+     * won't submit the next stage until this URB completes. */
+    struct {
+        bool pending;
+        uint32_t seqnum;   /* verbatim from CMD_SUBMIT header */
+        uint32_t len;
+        uint32_t offset;   /* bytes already delivered (chunked across arms) */
+        uint8_t *data;     /* g_malloc'd payload, owned; NULL if len == 0 */
+    } usbip_out_pending[USB_NUM_ENDPOINTS];
+
+    /* Firmware armed OUT EP (ENABLE with fresh DOEPDMA/DOEPTSIZ) but no
+     * host data has arrived yet - deliver on the next OUT CMD_SUBMIT. */
+    bool usbip_out_ep_armed[USB_NUM_ENDPOINTS];
+
+    /* DOEPDMA / DOEPTSIZ written since last ENABLE - buffer/size current */
+    bool usbip_out_dma_fresh[USB_NUM_ENDPOINTS];
+    bool usbip_out_tsiz_fresh[USB_NUM_ENDPOINTS];
+
+    /* Endpoint halt state: set while the firmware holds the STALL bit in
+     * DIEPCTL/DOEPCTL (e.g. BOT terminating a short data phase).  Host
+     * requests arriving on a halted EP complete immediately with -EPIPE
+     * so the host can do CLEAR_FEATURE(HALT) recovery. */
+    bool usbip_in_ep_halted[USB_NUM_ENDPOINTS];
+    bool usbip_out_ep_halted[USB_NUM_ENDPOINTS];
 
     /* Pending EP0 control transfer */
     bool usbip_ep0_pending;

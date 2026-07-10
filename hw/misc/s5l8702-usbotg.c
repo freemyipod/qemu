@@ -35,7 +35,7 @@ static void usbip_client_readable(void *opaque);
 #define USBIP_RET_SUBMIT       0x00000003
 #define USBIP_RET_UNLINK       0x00000004
 
-/* USB/IP wire structs — all fields big-endian */
+/* USB/IP wire structs - all fields big-endian */
 typedef struct {
     uint16_t version;
     uint16_t command;
@@ -136,7 +136,7 @@ typedef struct {
     uint8_t  padding[24];
 } QEMU_PACKED usbip_ret_unlink_t;
 
-/* Blocking read of exactly len bytes — safe to call inside fd handler
+/* Blocking read of exactly len bytes - safe to call inside fd handler
  * since the handler only fires when data is available. */
 static bool usbip_recv(int fd, void *buf, size_t len)
 {
@@ -145,9 +145,7 @@ static bool usbip_recv(int fd, void *buf, size_t len)
     while (len > 0) {
         ssize_t n = recv(fd, p, len, MSG_WAITALL);
         if (n <= 0) {
-            qemu_log_mask(LOG_UNIMP,
-                "USBIP: recv failed: wanted %zu got %zd (errno=%d %s)\n",
-                orig_len, n, errno, strerror(errno));
+            trace_s5l8702_usbotg_recv_failed(orig_len, n, errno);
             return false;
         }
         p += n;
@@ -164,9 +162,7 @@ static bool usbip_send(int fd, const void *buf, size_t len)
     while (len > 0) {
         ssize_t n = send(fd, p, len, MSG_NOSIGNAL);
         if (n <= 0) {
-            qemu_log_mask(LOG_UNIMP,
-                "USBIP: send failed: wanted %zu got %zd (errno=%d %s)\n",
-                orig_len, n, errno, strerror(errno));
+            trace_s5l8702_usbotg_send_failed(orig_len, n, errno);
             return false;
         }
         p += n;
@@ -177,11 +173,9 @@ static bool usbip_send(int fd, const void *buf, size_t len)
 
 static void usbip_disconnect_impl(S5L8702UsbOtgState *s, const char *reason)
 {
-    qemu_log_mask(LOG_UNIMP, "USBIP: disconnect from %s "
-                  "(phase=%d ep0_pending=%d ep0_d2h=%d ep0_status_pending=%d inep_active=%d)\n",
-                  reason, s->enumeration_phase,
-                  s->usbip_ep0_pending, s->usbip_ep0_d2h,
-                  s->usbip_ep0_status_pending, s->usbip_inep_active);
+    trace_s5l8702_usbotg_disconnect(reason, s->enumeration_phase,
+                                    s->usbip_ep0_pending, s->usbip_ep0_d2h,
+                                    s->usbip_ep0_status_pending, s->usbip_inep_active);
     if (s->usbip_client_fd >= 0) {
         qemu_set_fd_handler(s->usbip_client_fd, NULL, NULL, NULL);
         close(s->usbip_client_fd);
@@ -197,15 +191,27 @@ static void usbip_disconnect_impl(S5L8702UsbOtgState *s, const char *reason)
     memset(s->usbip_in_ep_xfercompl_pending, 0, sizeof(s->usbip_in_ep_xfercompl_pending));
     memset(s->usbip_in_dma_fresh, 0, sizeof(s->usbip_in_dma_fresh));
     memset(s->usbip_in_tsiz_fresh, 0, sizeof(s->usbip_in_tsiz_fresh));
+    for (int i = 0; i < USB_NUM_ENDPOINTS; i++) {
+        g_free(s->usbip_out_pending[i].data);
+    }
+    memset(s->usbip_out_pending, 0, sizeof(s->usbip_out_pending));
+    memset(s->usbip_out_ep_armed, 0, sizeof(s->usbip_out_ep_armed));
+    memset(s->usbip_out_dma_fresh, 0, sizeof(s->usbip_out_dma_fresh));
+    memset(s->usbip_out_tsiz_fresh, 0, sizeof(s->usbip_out_tsiz_fresh));
+    memset(s->usbip_in_ep_halted, 0, sizeof(s->usbip_in_ep_halted));
+    memset(s->usbip_out_ep_halted, 0, sizeof(s->usbip_out_ep_halted));
 }
 #define usbip_disconnect(s) usbip_disconnect_impl(s, __func__)
 
 /* Send RET_SUBMIT response for a CMD_SUBMIT.
- * seqnum is echoed verbatim (already network byte order). */
-static bool usbip_send_ret_submit(S5L8702UsbOtgState *s,
-                                   uint32_t seqnum,
-                                   const uint8_t *data,
-                                   uint32_t data_len)
+ * seqnum is echoed verbatim (already network byte order).
+ * status is 0 for success or a negative errno (e.g. -EPIPE for a stalled
+ * endpoint), matching Linux URB status semantics. */
+static bool usbip_send_ret_submit_status(S5L8702UsbOtgState *s,
+                                          uint32_t seqnum,
+                                          const uint8_t *data,
+                                          uint32_t data_len,
+                                          int32_t status)
 {
     int fd = s->usbip_client_fd;
     if (fd < 0) return false;
@@ -215,6 +221,7 @@ static bool usbip_send_ret_submit(S5L8702UsbOtgState *s,
     ret_hdr.seqnum  = seqnum;   /* verbatim */
 
     usbip_ret_submit_t ret_body = {0};
+    ret_body.status            = __builtin_bswap32((uint32_t)status);
     ret_body.actual_length     = __builtin_bswap32(data_len);
     ret_body.number_of_packets = __builtin_bswap32(0);  /* 0 for non-isochronous transfers */
 
@@ -224,6 +231,48 @@ static bool usbip_send_ret_submit(S5L8702UsbOtgState *s,
         if (!usbip_send(fd, data, data_len)) return false;
     }
     return true;
+}
+
+static bool usbip_send_ret_submit(S5L8702UsbOtgState *s,
+                                   uint32_t seqnum,
+                                   const uint8_t *data,
+                                   uint32_t data_len)
+{
+    return usbip_send_ret_submit_status(s, seqnum, data, data_len, 0);
+}
+
+/* Firmware stalled an endpoint that has an outstanding host request.
+ * Complete the URB with -EPIPE so the host sees the stall immediately
+ * (instead of waiting out its 30s URB timeout) and can issue
+ * CLEAR_FEATURE(HALT) / error recovery per the USB spec. */
+static void usbip_reject_stalled(S5L8702UsbOtgState *s, uint32_t ep, bool is_in)
+{
+    if (ep == 0) {
+        if (!s->usbip_ep0_pending) return;
+        trace_s5l8702_usbotg_ep0_stall_reject();
+        usbip_send_ret_submit_status(s, s->usbip_ep0_seqnum, NULL, 0, -EPIPE);
+        s->usbip_ep0_pending = false;
+        s->usbip_ep0_txsize_armed = false;
+        if (s->usbip_client_fd >= 0) {
+            qemu_set_fd_handler(s->usbip_client_fd, usbip_client_readable, NULL, s);
+        }
+    } else if (is_in) {
+        s->usbip_in_ep_armed[ep] = false;
+        if (!s->usbip_in_pending[ep].pending) return;
+        trace_s5l8702_usbotg_in_stall_reject(ep);
+        usbip_send_ret_submit_status(s, s->usbip_in_pending[ep].seqnum, NULL, 0, -EPIPE);
+        s->usbip_in_pending[ep].pending = false;
+    } else {
+        s->usbip_out_ep_armed[ep] = false;
+        if (!s->usbip_out_pending[ep].pending) return;
+        trace_s5l8702_usbotg_out_stall_reject(ep);
+        usbip_send_ret_submit_status(s, s->usbip_out_pending[ep].seqnum, NULL, 0, -EPIPE);
+        g_free(s->usbip_out_pending[ep].data);
+        s->usbip_out_pending[ep].data = NULL;
+        s->usbip_out_pending[ep].len = 0;
+        s->usbip_out_pending[ep].offset = 0;
+        s->usbip_out_pending[ep].pending = false;
+    }
 }
 
 /* iPod Nano 3G / Apple USB MSC device identity. */
@@ -244,7 +293,7 @@ static bool usbip_send_devlist(S5L8702UsbOtgState *s)
     strncpy(dev_id.bus_id, "1-1", sizeof(dev_id.bus_id) - 1);
     dev_id.busnum = __builtin_bswap32(1);
     dev_id.devnum = __builtin_bswap32(2);
-    dev_id.speed  = __builtin_bswap32(3); /* USB_SPEED_HIGH — real device is high-speed 480 Mbps */
+    dev_id.speed  = __builtin_bswap32(3); /* USB_SPEED_HIGH - real device is high-speed 480 Mbps */
     if (!usbip_send(fd, &dev_id, sizeof(dev_id))) return false;
 
     /* Device descriptor with Apple vendor ID.
@@ -283,7 +332,7 @@ static bool usbip_send_import_reply(S5L8702UsbOtgState *s)
     strncpy(dev_id.bus_id, "1-1", sizeof(dev_id.bus_id) - 1);
     dev_id.busnum = __builtin_bswap32(1);
     dev_id.devnum = __builtin_bswap32(2);
-    dev_id.speed  = __builtin_bswap32(3); /* USB_SPEED_HIGH — real device is high-speed 480 Mbps */
+    dev_id.speed  = __builtin_bswap32(3); /* USB_SPEED_HIGH - real device is high-speed 480 Mbps */
     if (!usbip_send(fd, &dev_id, sizeof(dev_id))) return false;
 
     /* Device descriptor with Apple vendor ID. Real descriptor from firmware. */
@@ -327,9 +376,7 @@ static void usbip_handle_ep0_submit(S5L8702UsbOtgState *s,
 
     /* Ensure firmware has armed OUT EP0 with a valid DMA buffer */
     if (s->out_eps[0].dma_address == 0) {
-        qemu_log_mask(LOG_UNIMP,
-            "USBIP: EP0 CMD_SUBMIT but OUT EP0 DMA not armed (DMA=0x%08x), disconnecting\n",
-            s->out_eps[0].dma_address);
+        trace_s5l8702_usbotg_ep0_not_armed(s->out_eps[0].dma_address);
         usbip_disconnect(s);
         return;
     }
@@ -337,7 +384,7 @@ static void usbip_handle_ep0_submit(S5L8702UsbOtgState *s,
     /* For h2d transfers with a data stage, read and write data after SETUP */
     if (!d2h && buf_len > 0) {
         if (buf_len > 4096) {
-            qemu_log_mask(LOG_UNIMP, "USBIP: EP0 OUT data too large: %u\n", buf_len);
+            trace_s5l8702_usbotg_ep0_out_too_large(buf_len);
             usbip_disconnect(s);
             return;
         }
@@ -352,7 +399,7 @@ static void usbip_handle_ep0_submit(S5L8702UsbOtgState *s,
     /* Simulate 8 bytes consumed: XFERSIZE = 64-8 = 56 */
     s->out_eps[0].tx_size = (s->out_eps[0].tx_size & ~0x7f) | 0x38;
 
-    /* Fire DOEPINT[0] STUP — firmware ISR will see this */
+    /* Fire DOEPINT[0] STUP - firmware ISR will see this */
     s->out_eps[0].interrupt_status |= USB_EPINT_SetUp;
     s->pcgcctl = 0;
 
@@ -365,16 +412,87 @@ static void usbip_handle_ep0_submit(S5L8702UsbOtgState *s,
     /* Pause reading until we can respond */
     qemu_set_fd_handler(fd, NULL, NULL, NULL);
 
-    qemu_log_mask(LOG_UNIMP,
-        "USBIP: EP0 SETUP %s %02x%02x%02x%02x%02x%02x%02x%02x\n",
-        d2h ? "d2h" : "h2d",
+    trace_s5l8702_usbotg_ep0_setup(d2h ? "d2h" : "h2d",
         cmd->setup[0], cmd->setup[1], cmd->setup[2], cmd->setup[3],
         cmd->setup[4], cmd->setup[5], cmd->setup[6], cmd->setup[7]);
 
     s5l8702_usbotg_update_irq(s);
 }
 
-/* Handle CMD_SUBMIT for OUT bulk/interrupt endpoint (host→device). */
+/* Deliver buffered host→device data to an armed OUT endpoint:
+ * DMA the payload, update DOEPTSIZ, fire XferCompl, and complete the
+ * host's URB with RET_SUBMIT.  No-op unless the EP is both armed by
+ * firmware and has pending host data. */
+static void usbip_out_try_deliver(S5L8702UsbOtgState *s, uint32_t ep)
+{
+    if (!s->usbip_out_ep_armed[ep] || !s->usbip_out_pending[ep].pending) {
+        return;
+    }
+
+    uint32_t total = s->usbip_out_pending[ep].len;
+    uint32_t off = s->usbip_out_pending[ep].offset;
+    uint32_t remaining = total - off;
+    uint32_t seqnum = s->usbip_out_pending[ep].seqnum;
+    uint32_t xfer_size = s->out_eps[ep].tx_size & 0x7ffff;
+    uint32_t pkt_cnt = (s->out_eps[ep].tx_size >> 19) & 0x3ff;
+    uint32_t mps = s->out_eps[ep].control & USB_EPCON_MPS_MASK;
+    uint32_t len = remaining;
+
+    /* Deliver at most what the firmware armed; the rest waits for re-arm */
+    if (len > xfer_size) {
+        len = xfer_size;
+    }
+    if (len > 0) {
+        cpu_physical_memory_write(s->out_eps[ep].dma_address,
+                                  s->usbip_out_pending[ep].data + off, len);
+    } else if (remaining > 0) {
+        /* Armed with a zero-size buffer while data is waiting - deliver
+         * nothing but don't consume the arm, or we'd spin forever. */
+        trace_s5l8702_usbotg_out_zero_arm(ep, remaining);
+        return;
+    }
+
+    /* Update tx_size (XferSize bits 18:0, PktCnt bits 28:19) and dma_address
+     * the way hardware would: firmware computes received = programmed - remaining */
+    xfer_size -= len;
+    uint32_t pkts = mps ? DIV_ROUND_UP(len, mps) : 1;
+    if (pkts == 0) pkts = 1;  /* ZLP still consumes one packet */
+    pkt_cnt = (pkts >= pkt_cnt) ? 0 : pkt_cnt - pkts;
+    s->out_eps[ep].tx_size = (s->out_eps[ep].tx_size & ~0x1fffffff) | xfer_size | (pkt_cnt << 19);
+    s->out_eps[ep].dma_address += len;
+
+    s->usbip_out_pending[ep].offset = off + len;
+    s->usbip_out_ep_armed[ep] = false;
+
+    /* Fire DOEPINT[ep] XferCompl; transfer consumed the ENABLE */
+    s->out_eps[ep].interrupt_status |= USB_EPINT_XferCompl;
+    s->out_eps[ep].control &= ~USB_EPCON_ENABLE;
+    s->pcgcctl = 0;
+
+    if (s->usbip_out_pending[ep].offset >= total) {
+        /* All host data consumed - complete the URB */
+        g_free(s->usbip_out_pending[ep].data);
+        s->usbip_out_pending[ep].data = NULL;
+        s->usbip_out_pending[ep].pending = false;
+
+        trace_s5l8702_usbotg_out_delivered(ep, total);
+
+        if (!usbip_send_ret_submit(s, seqnum, NULL, total)) {
+            usbip_disconnect(s);
+            return;
+        }
+    } else {
+        trace_s5l8702_usbotg_out_chunk(ep, s->usbip_out_pending[ep].offset, total);
+    }
+
+    s5l8702_usbotg_update_irq(s);
+}
+
+/* Handle CMD_SUBMIT for OUT bulk/interrupt endpoint (host→device).
+ * The payload is always consumed from the socket (to keep protocol framing)
+ * but only delivered to guest memory once the firmware has armed the EP
+ * with fresh DOEPDMA/DOEPTSIZ + ENABLE.  RET_SUBMIT is deferred until
+ * delivery so the host's URB doesn't complete prematurely. */
 static void usbip_handle_out_submit(S5L8702UsbOtgState *s,
                                      const usbip_header_t *hdr,
                                      const usbip_cmd_submit_t *cmd,
@@ -382,42 +500,65 @@ static void usbip_handle_out_submit(S5L8702UsbOtgState *s,
 {
     int fd = s->usbip_client_fd;
     uint32_t buf_len = __builtin_bswap32(cmd->transfer_buffer_length);
+    uint8_t *buf = NULL;
+
+    if (ep >= USB_NUM_ENDPOINTS) {
+        trace_s5l8702_usbotg_out_invalid_ep(ep);
+        usbip_disconnect(s);
+        return;
+    }
 
     if (buf_len > 0) {
         if (buf_len > 65536) {
-            qemu_log_mask(LOG_UNIMP, "USBIP: OUT EP%u data too large: %u\n", ep, buf_len);
+            trace_s5l8702_usbotg_out_too_large(ep, buf_len);
             usbip_disconnect(s);
             return;
         }
-        uint8_t *buf = g_malloc(buf_len);
+        buf = g_malloc(buf_len);
         if (!usbip_recv(fd, buf, buf_len)) {
             g_free(buf);
             usbip_disconnect(s);
             return;
         }
-        cpu_physical_memory_write(s->out_eps[ep].dma_address, buf, buf_len);
-        g_free(buf);
-
-        /* Clear XFERSIZE to 0 — all bytes received */
-        s->out_eps[ep].tx_size &= ~0x7ffff;
     }
 
-    /* Fire DOEPINT[ep] XferCompl */
-    s->out_eps[ep].interrupt_status |= USB_EPINT_XferCompl;
-    s->pcgcctl = 0;
-
-    /* Send RET_SUBMIT immediately — OUT transfers don't need deferred response.
-     * actual_length must equal buf_len so the host sees a complete transfer;
-     * passing data=NULL with buf_len>0 is safe because usbip_send_ret_submit
-     * only sends trailing data when data!=NULL. */
-    if (!usbip_send_ret_submit(s, hdr->seqnum, NULL, buf_len)) {
+    if (s->usbip_out_pending[ep].pending) {
+        trace_s5l8702_usbotg_out_double_pending(ep);
+        g_free(buf);
         usbip_disconnect(s);
         return;
     }
+    if (s->usbip_out_ep_halted[ep]) {
+        trace_s5l8702_usbotg_out_halted_urb(ep);
+        g_free(buf);
+        usbip_send_ret_submit_status(s, hdr->seqnum, NULL, 0, -EPIPE);
+        return;
+    }
 
-    qemu_log_mask(LOG_UNIMP, "USBIP: OUT EP%u ←host %u bytes\n", ep, buf_len);
+    s->usbip_out_pending[ep].pending = true;
+    s->usbip_out_pending[ep].seqnum = hdr->seqnum;  /* verbatim */
+    s->usbip_out_pending[ep].len = buf_len;
+    s->usbip_out_pending[ep].offset = 0;
+    s->usbip_out_pending[ep].data = buf;
 
-    s5l8702_usbotg_update_irq(s);
+    /* Level-triggered arming: if the EP's ENABLE bit is currently set, the
+     * firmware is ready to receive into DOEPDMA right now - even if the
+     * enabling write happened before we started tracking (firmware enables
+     * its bulk OUT EP once and leaves it waiting; real hardware just NAKs
+     * until data arrives). */
+    if (!s->usbip_out_ep_armed[ep] &&
+        (s->out_eps[ep].control & USB_EPCON_ENABLE)) {
+        s->usbip_out_ep_armed[ep] = true;
+        s->usbip_out_dma_fresh[ep] = false;
+        s->usbip_out_tsiz_fresh[ep] = false;
+        trace_s5l8702_usbotg_out_level_armed(ep, s->out_eps[ep].tx_size & 0x7ffff);
+    }
+
+    if (s->usbip_out_ep_armed[ep]) {
+        usbip_out_try_deliver(s, ep);
+    } else {
+        trace_s5l8702_usbotg_out_queued(ep, buf_len);
+    }
 }
 
 /* Handle CMD_SUBMIT for IN bulk/interrupt endpoint (device→host).
@@ -429,13 +570,21 @@ static void usbip_handle_in_submit(S5L8702UsbOtgState *s,
                                     uint32_t buf_len)
 {
     if (ep >= USB_NUM_ENDPOINTS) {
-        qemu_log_mask(LOG_UNIMP, "USBIP: IN request for invalid EP%u\n", ep);
+        trace_s5l8702_usbotg_in_invalid_ep(ep);
         usbip_disconnect(s);
         return;
     }
     if (s->usbip_in_pending[ep].pending) {
-        qemu_log_mask(LOG_UNIMP, "USBIP: IN EP%u already has pending request\n", ep);
+        trace_s5l8702_usbotg_in_double_pending(ep);
         usbip_disconnect(s);
+        return;
+    }
+    if (s->usbip_in_ep_halted[ep]) {
+        /* Endpoint is halted (firmware STALL, e.g. BOT short-data-phase
+         * termination) - fail the URB now so the host runs clear-halt
+         * recovery instead of waiting out its timeout. */
+        trace_s5l8702_usbotg_in_halted_urb(ep);
+        usbip_send_ret_submit_status(s, hdr->seqnum, NULL, 0, -EPIPE);
         return;
     }
 
@@ -448,8 +597,7 @@ static void usbip_handle_in_submit(S5L8702UsbOtgState *s,
         if (len > 65536) len = 65536;
         uint8_t *data = g_malloc0(len + 1);
         cpu_physical_memory_read(s->in_eps[ep].dma_address, data, len);
-        qemu_log_mask(LOG_UNIMP,
-            "USBIP: IN EP%u →host %u bytes [imm]\n", ep, len);
+        trace_s5l8702_usbotg_in_immediate(ep, len);
         usbip_send_ret_submit(s, hdr->seqnum, data, len);
         g_free(data);
 
@@ -466,10 +614,10 @@ static void usbip_handle_in_submit(S5L8702UsbOtgState *s,
         s->in_eps[ep].dma_address += len;
 
         s->usbip_in_ep_armed[ep] = false;
-        /* Fire XferCompl — next ENABLE will be maintenance, skip it */
+        /* Fire XferCompl - next ENABLE will be maintenance, skip it */
         s->usbip_in_ep_xfercompl_pending[ep] = true;
         s->in_eps[ep].interrupt_status |= USB_EPINT_XferCompl;
-        /* Clear ENABLE bit — transfer is done */
+        /* Clear ENABLE bit - transfer is done */
         s->in_eps[ep].control &= ~USB_EPCON_ENABLE;
         s5l8702_usbotg_update_irq(s);
         return;
@@ -479,7 +627,15 @@ static void usbip_handle_in_submit(S5L8702UsbOtgState *s,
     s->usbip_in_pending[ep].seqnum = hdr->seqnum;  /* verbatim */
     s->usbip_in_pending[ep].buf_len = buf_len;
 
-    qemu_log_mask(LOG_UNIMP, "USBIP: IN EP%u pending (host wants %u bytes)\n", ep, buf_len);
+    /* The host is polling this endpoint with IN tokens.  On real hardware
+     * an IN token to a not-yet-enabled endpoint fires DIEPINT.INTknTXFEmp;
+     * some firmware waits for exactly that event before arming the EP
+     * (e.g. for the CSW of a mass-storage transfer).  Inject it. */
+    s->in_eps[ep].interrupt_status |= USB_EPINT_INTknTXFEmp;
+    s->pcgcctl = 0;
+    s5l8702_usbotg_update_irq(s);
+
+    trace_s5l8702_usbotg_in_pending(ep, buf_len);
 }
 
 static void usbip_handle_cmd_submit(S5L8702UsbOtgState *s, const usbip_header_t *hdr)
@@ -510,15 +666,22 @@ static void usbip_handle_cmd_unlink(S5L8702UsbOtgState *s, const usbip_header_t 
     if (!usbip_recv(fd, &cmd, sizeof(cmd))) { usbip_disconnect(s); return; }
 
     uint32_t unlink_seqnum = cmd.unlink_seqnum; /* verbatim, big-endian */
-    qemu_log_mask(LOG_UNIMP, "USBIP: CMD_UNLINK seqnum=0x%x (target=0x%x)\n",
-                  __builtin_bswap32(hdr->seqnum),
-                  __builtin_bswap32(unlink_seqnum));
+    trace_s5l8702_usbotg_unlink(__builtin_bswap32(hdr->seqnum),
+                                __builtin_bswap32(unlink_seqnum));
 
-    /* Clear any pending IN EP request that matches the unlinked seqnum */
+    /* Clear any pending IN/OUT EP request that matches the unlinked seqnum */
     for (int i = 0; i < USB_NUM_ENDPOINTS; i++) {
         if (s->usbip_in_pending[i].pending &&
             s->usbip_in_pending[i].seqnum == unlink_seqnum) {
             s->usbip_in_pending[i].pending = false;
+        }
+        if (s->usbip_out_pending[i].pending &&
+            s->usbip_out_pending[i].seqnum == unlink_seqnum) {
+            g_free(s->usbip_out_pending[i].data);
+            s->usbip_out_pending[i].data = NULL;
+            s->usbip_out_pending[i].len = 0;
+            s->usbip_out_pending[i].offset = 0;
+            s->usbip_out_pending[i].pending = false;
         }
     }
 
@@ -548,8 +711,7 @@ static void usbip_client_readable(void *opaque)
         uint16_t command = __builtin_bswap16(req.command);
 
         if (version != USBIP_VERSION) {
-            qemu_log_mask(LOG_UNIMP, "USBIP: Bad version 0x%04x (expected 0x%04x)\n",
-                          version, USBIP_VERSION);
+            trace_s5l8702_usbotg_bad_version(version);
             usbip_disconnect(s);
             return;
         }
@@ -561,7 +723,7 @@ static void usbip_client_readable(void *opaque)
             if (!usbip_recv(fd, bus_id, sizeof(bus_id))) { usbip_disconnect(s); return; }
             if (!usbip_send_import_reply(s)) { usbip_disconnect(s); return; }
             s->usbip_device_imported = true;
-            qemu_log_mask(LOG_UNIMP, "USBIP: device imported (phase=%d)\n", s->enumeration_phase);
+            trace_s5l8702_usbotg_imported(s->enumeration_phase);
             if (s->enumeration_phase == 1) {
                 s->gintsts |= (1 << 13);  /* ENUMDONE */
                 s->enumeration_phase = 2;
@@ -570,7 +732,7 @@ static void usbip_client_readable(void *opaque)
                 usbip_maybe_arm_fd(s);
             }
         } else {
-            qemu_log_mask(LOG_UNIMP, "USBIP: unknown pre-import command 0x%04x\n", command);
+            trace_s5l8702_usbotg_unknown_preimport_cmd(command);
             usbip_disconnect(s);
         }
     } else {
@@ -584,7 +746,7 @@ static void usbip_client_readable(void *opaque)
         } else if (command == USBIP_CMD_UNLINK) {
             usbip_handle_cmd_unlink(s, &hdr);
         } else {
-            qemu_log_mask(LOG_UNIMP, "USBIP: Unknown command 0x%08x\n", command);
+            trace_s5l8702_usbotg_unknown_cmd(command);
             usbip_disconnect(s);
         }
     }
@@ -599,9 +761,9 @@ static void usbip_listen_readable(void *opaque)
     if (client_fd < 0) return;
 
     if (s->usbip_client_fd >= 0) {
-        /* Already have a client — reject */
+        /* Already have a client - reject */
         close(client_fd);
-        qemu_log_mask(LOG_UNIMP, "USBIP: Rejected second client\n");
+        trace_s5l8702_usbotg_second_client();
         return;
     }
 
@@ -610,7 +772,7 @@ static void usbip_listen_readable(void *opaque)
 
     s->usbip_client_fd = client_fd;
     qemu_set_fd_handler(client_fd, usbip_client_readable, NULL, s);
-    qemu_log_mask(LOG_UNIMP, "USBIP: Client connected (fd=%d)\n", client_fd);
+    trace_s5l8702_usbotg_client_connected(client_fd);
 }
 
 /* Start the USB/IP TCP server on port 3240. */
@@ -618,7 +780,7 @@ static void usbip_server_start(S5L8702UsbOtgState *s)
 {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
-        qemu_log_mask(LOG_UNIMP, "USBIP: Failed to create socket: %s\n", strerror(errno));
+        trace_s5l8702_usbotg_server_error("socket", errno);
         return;
     }
 
@@ -633,19 +795,19 @@ static void usbip_server_start(S5L8702UsbOtgState *s)
     };
 
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        qemu_log_mask(LOG_UNIMP, "USBIP: bind() failed: %s\n", strerror(errno));
+        trace_s5l8702_usbotg_server_error("bind", errno);
         close(fd);
         return;
     }
     if (listen(fd, 1) < 0) {
-        qemu_log_mask(LOG_UNIMP, "USBIP: listen() failed: %s\n", strerror(errno));
+        trace_s5l8702_usbotg_server_error("listen", errno);
         close(fd);
         return;
     }
 
     s->usbip_listen_fd = fd;
     qemu_set_fd_handler(fd, usbip_listen_readable, NULL, s);
-    qemu_log_mask(LOG_UNIMP, "USBIP: Listening on 127.0.0.1:%d\n", USBIP_PORT);
+    trace_s5l8702_usbotg_listening(USBIP_PORT);
 }
 
 /* ============================================================ */
@@ -762,6 +924,12 @@ static void s5l8702_usbotg_update_ep(S5L8702UsbOtgState *s, S5L8702UsbEpState *e
         ep->control &= ~(1 << 27);  /* Clear SETNAK */
     }
 
+    /* Handle CLEAR NAK */
+    if (ep->control & (1 << 26)) {  /* CNAK */
+        ep->control &= ~(1 << 17);  /* Clear NAKSTS */
+        ep->control &= ~(1 << 26);  /* Clear CNAK (write-only trigger bit) */
+    }
+
     /* Handle disable */
     if (ep->control & (1 << 30)) {  /* DISABLE */
         ep->interrupt_status |= 0x2;  /* EPDisbld */
@@ -781,6 +949,12 @@ static uint32_t s5l8702_usbotg_in_ep_read(S5L8702UsbOtgState *s, uint8_t ep, hwa
         case 0x08: return s->in_eps[ep].interrupt_status;
         case 0x10: return s->in_eps[ep].tx_size;
         case 0x14: return s->in_eps[ep].dma_address;
+        case 0x18:
+            /* DTXFSTS: available space in the endpoint's TxFIFO, in 32-bit
+             * words.  We move data instantly, so the FIFO is always empty -
+             * report maximum free space.  Returning 0 here (the old default)
+             * wedges firmware that polls for FIFO room before arming. */
+            return 0xFFFF;
         case 0x1C: return s->in_eps[ep].dma_buffer;
         default:
             qemu_log_mask(LOG_GUEST_ERROR, "USB: Bad IN EP read offset 0x%x\n", (unsigned)offset);
@@ -822,23 +996,23 @@ static uint64_t s5l8702_usbotg_read(void *opaque, hwaddr offset, unsigned size)
      * USB host enumeration injection state machine (GINTSTS idle poll trigger).
      *
      * Phase map:
-     *  1         — poll for ENUMDONE (20 idle reads)
-     *  2         — ENUMDONE pending (cleared in GINTSTS write handler)
-     *  3         — SETUP[0] GET_DESCRIPTOR Device(64) active
-     *  4         — INEP XferCompl pending (d2h)
-     *  5         — STATUS OUT + idle: poll to inject SETUP[1]
-     *  6         — SETUP[1] SET_ADDRESS active
-     *  7         — ZLP IN pending
-     *  8         — idle: poll to inject SETUP[2]
-     *  9         — SETUP[2] GET_DESCRIPTOR Device(18) active
-     *  10        — INEP XferCompl pending (d2h)
-     *  11        — STATUS OUT + idle: poll to inject SETUP[3]
-     *  12        — SETUP[3] GET_DESCRIPTOR Config(255) active
-     *  13        — INEP XferCompl pending (d2h)
-     *  14        — STATUS OUT + idle: poll to inject SETUP[4]
-     *  15        — SETUP[4] SET_CONFIGURATION(1) active
-     *  16        — ZLP IN pending
-     *  17        — MSC active (enumeration complete)
+     *  1         - poll for ENUMDONE (20 idle reads)
+     *  2         - ENUMDONE pending (cleared in GINTSTS write handler)
+     *  3         - SETUP[0] GET_DESCRIPTOR Device(64) active
+     *  4         - INEP XferCompl pending (d2h)
+     *  5         - STATUS OUT + idle: poll to inject SETUP[1]
+     *  6         - SETUP[1] SET_ADDRESS active
+     *  7         - ZLP IN pending
+     *  8         - idle: poll to inject SETUP[2]
+     *  9         - SETUP[2] GET_DESCRIPTOR Device(18) active
+     *  10        - INEP XferCompl pending (d2h)
+     *  11        - STATUS OUT + idle: poll to inject SETUP[3]
+     *  12        - SETUP[3] GET_DESCRIPTOR Config(255) active
+     *  13        - INEP XferCompl pending (d2h)
+     *  14        - STATUS OUT + idle: poll to inject SETUP[4]
+     *  15        - SETUP[4] SET_CONFIGURATION(1) active
+     *  16        - ZLP IN pending
+     *  17        - MSC active (enumeration complete)
      */
     if (offset == GINTSTS && s->gintsts == 0 && !s->usbip_device_imported) {
         /* Lookup table: {phase, threshold, setup_bytes, description} */
@@ -863,8 +1037,7 @@ static uint64_t s5l8702_usbotg_read(void *opaque, hwaddr offset, unsigned size)
             if (s->gintsts_poll_count >= 20) {
                 s->gintsts |= (1 << 13);
                 s->enumeration_phase = 2;
-                qemu_log_mask(LOG_UNIMP, "USB: Injected ENUMDONE after %d idle polls\n",
-                             s->gintsts_poll_count);
+                trace_s5l8702_usbotg_enumdone_injected(s->gintsts_poll_count);
             }
         } else {
             for (int ti = 0; ti < (int)(sizeof(inject_table)/sizeof(inject_table[0])); ti++) {
@@ -878,8 +1051,7 @@ static uint64_t s5l8702_usbotg_read(void *opaque, hwaddr offset, unsigned size)
                         s->pcgcctl = 0;
                         s->enumeration_phase++;
                         s->gintsts_poll_count = 0;
-                        qemu_log_mask(LOG_UNIMP, "USB: Injected %s SETUP (phase%d->%d)\n",
-                                     inject_table[ti].name,
+                        trace_s5l8702_usbotg_setup_injected(inject_table[ti].name,
                                      inject_table[ti].phase, inject_table[ti].phase + 1);
                     }
                     break;
@@ -903,7 +1075,7 @@ static uint64_t s5l8702_usbotg_read(void *opaque, hwaddr offset, unsigned size)
         case GINTSTS:
             val = s->gintsts;
             if (val != 0) {
-                /* GINTSTS polled frequently — not logged */
+                /* GINTSTS polled frequently - not logged */
             }
             break;
         case DIEPMSK: val = s->diepmsk; break;
@@ -999,8 +1171,7 @@ static void patch_descriptor_for_highspeed(uint8_t *data, uint32_t len)
     data[29] = 0x00;
     data[30] = 0x02;
 
-    qemu_log_mask(LOG_UNIMP,
-        "USBIP: Patched descriptor wMaxPacketSize 64→512 for high-speed\n");
+    trace_s5l8702_usbotg_descriptor_patched();
 }
 
 static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr offset, uint32_t val)
@@ -1015,6 +1186,20 @@ static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr
             s->in_eps[ep].control = val;
             s5l8702_usbotg_update_ep(s, &s->in_eps[ep]);
 
+            if (val & USB_EPCON_STALL) {
+                if (!s->usbip_in_ep_halted[ep]) {
+                    trace_s5l8702_usbotg_in_halted(ep);
+                }
+                s->usbip_in_ep_halted[ep] = true;
+                if (s->usbip_device_imported) {
+                    usbip_reject_stalled(s, ep, true);
+                }
+                break;
+            } else if (s->usbip_in_ep_halted[ep]) {
+                trace_s5l8702_usbotg_in_halt_cleared(ep);
+                s->usbip_in_ep_halted[ep] = false;
+            }
+
             if (val & USB_EPCON_ENABLE) {
                 if (!s->usbip_device_imported) {
                     /* === Standalone enumeration injection ===
@@ -1025,8 +1210,7 @@ static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr
                         (s->enumeration_phase % 3) == 0) {
                         s->in_eps[0].interrupt_status |= USB_EPINT_XferCompl;
                         s->enumeration_phase++;
-                        qemu_log_mask(LOG_UNIMP,
-                            "USB: IN EP0 enabled (phase%d->%d), injecting INEP XferCompl\n",
+                        trace_s5l8702_usbotg_inep_xfercompl_injected(
                             s->enumeration_phase - 1, s->enumeration_phase);
                         s5l8702_usbotg_update_irq(s);
                     }
@@ -1043,7 +1227,7 @@ static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr
                         /* Patch descriptor for high-speed compatibility */
                         patch_descriptor_for_highspeed(data, len);
 
-                        qemu_log_mask(LOG_UNIMP, "USBIP: EP0 →host %u bytes [ctrl d2h]\n", len);
+                        trace_s5l8702_usbotg_ep0_data_in(len);
                         if (!usbip_send_ret_submit(s, s->usbip_ep0_seqnum, data, len)) {
                             usbip_disconnect(s);
                             return;
@@ -1057,13 +1241,13 @@ static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr
 
                         s->usbip_ep0_pending = false;
                         /* Fire INEP XferCompl so firmware clears it.
-                         * Track that it's outstanding — the fd handler must not
+                         * Track that it's outstanding - the fd handler must not
                          * re-arm until BOTH this AND the STATUS OUT XferCompl have
                          * been cleared, otherwise a SET_ADDRESS SETUP injected
                          * between the two clears trips the h2d case 0x08 path. */
                         s->usbip_inep_active = true;
                         s->in_eps[0].interrupt_status  |= USB_EPINT_XferCompl;
-                        /* Clear ENABLE bit — transfer is done */
+                        /* Clear ENABLE bit - transfer is done */
                         s->in_eps[0].control &= ~USB_EPCON_ENABLE;
                         /* Fire STATUS OUT XferCompl so firmware completes status stage. */
                         s->out_eps[0].interrupt_status |= USB_EPINT_XferCompl;
@@ -1073,7 +1257,7 @@ static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr
                         /* h2d control: firmware enabling IN EP0 for ZLP status.
                          * Fire XferCompl; RET_SUBMIT sent when firmware clears it. */
                         s->in_eps[0].interrupt_status |= USB_EPINT_XferCompl;
-                        /* Clear ENABLE bit — transfer is done */
+                        /* Clear ENABLE bit - transfer is done */
                         s->in_eps[0].control &= ~USB_EPCON_ENABLE;
                         s5l8702_usbotg_update_irq(s);
                         }
@@ -1090,7 +1274,7 @@ static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr
                          *    CMD_SUBMIT arrives later, fulfill then.
                          *
                          * We never fire XferCompl without actually delivering data
-                         * to the host — doing so would desync the firmware's state
+                         * to the host - doing so would desync the firmware's state
                          * machine (it would think data was sent when it wasn't).
                          */
                         uint32_t cur_txsize = s->in_eps[ep].tx_size;
@@ -1098,7 +1282,7 @@ static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr
                         bool is_fresh = s->usbip_in_dma_fresh[ep] || s->usbip_in_tsiz_fresh[ep];
 
                         if (is_fresh) {
-                            /* Real ENABLE with a freshly-written DIEPDMA or DIEPTSIZ — 
+                            /* Real ENABLE with a freshly-written DIEPDMA or DIEPTSIZ - 
                              * the buffer or size is current. Either fulfill an 
                              * already-pending CMD_SUBMIT or arm for the next one. */
                             s->usbip_in_dma_fresh[ep] = false;
@@ -1106,15 +1290,14 @@ static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr
                             s->usbip_in_ep_xfercompl_pending[ep] = false;
 
                             if (s->usbip_in_pending[ep].pending) {
-                                /* CMD_SUBMIT already waiting — fulfill now. */
+                                /* CMD_SUBMIT already waiting - fulfill now. */
                                 uint32_t dev_len = cur_txsize & 0x7ffff;
                                 uint32_t host_len = s->usbip_in_pending[ep].buf_len;
                                 uint32_t len = (host_len && host_len < dev_len) ? host_len : dev_len;
                                 if (len > 65536) len = 65536;
                                 uint8_t *data = g_malloc0(len + 1);
                                 cpu_physical_memory_read(cur_dma, data, len);
-                                qemu_log_mask(LOG_UNIMP,
-                                    "USBIP: IN EP%u →host %u bytes [deferred]\n", ep, len);
+                                trace_s5l8702_usbotg_in_deferred(ep, len);
                                 if (!usbip_send_ret_submit(s, s->usbip_in_pending[ep].seqnum, data, len)) {
                                     g_free(data);
                                     usbip_disconnect(s);
@@ -1136,19 +1319,17 @@ static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr
 
                                 s->usbip_in_pending[ep].pending = false;
                                 s->usbip_in_ep_armed[ep] = false;
-                                /* Fire XferCompl — next ENABLE will be maintenance, skip it */
+                                /* Fire XferCompl - next ENABLE will be maintenance, skip it */
                                 s->usbip_in_ep_xfercompl_pending[ep] = true;
                                 s->in_eps[ep].interrupt_status |= USB_EPINT_XferCompl;
-                                /* Clear ENABLE bit — transfer is done */
+                                /* Clear ENABLE bit - transfer is done */
                                 s->in_eps[ep].control &= ~USB_EPCON_ENABLE;
                                 s5l8702_usbotg_update_irq(s);
                             } else {
-                                /* No CMD_SUBMIT yet — arm.  When CMD_SUBMIT arrives
+                                /* No CMD_SUBMIT yet - arm.  When CMD_SUBMIT arrives
                                  * it can fulfill immediately. */
                                 s->usbip_in_ep_armed[ep] = true;
-                                qemu_log_mask(LOG_UNIMP,
-                                    "USBIP: IN EP%u armed (%u bytes)\n",
-                                    ep, cur_txsize & 0x7ffff);
+                                trace_s5l8702_usbotg_in_armed(ep, cur_txsize & 0x7ffff);
                             }
                         } else if (s->usbip_in_ep_xfercompl_pending[ep]) {
                             /* Maintenance re-arm: firmware re-enables the endpoint
@@ -1158,13 +1339,14 @@ static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr
                              * but do NOT fulfill any CMD_SUBMIT. */
                             s->usbip_in_ep_xfercompl_pending[ep] = false;
                             s->in_eps[ep].interrupt_status |= USB_EPINT_XferCompl;
-                            /* Clear ENABLE bit — maintenance is done */
+                            /* Clear ENABLE bit - maintenance is done */
                             s->in_eps[ep].control &= ~USB_EPCON_ENABLE;
                             s5l8702_usbotg_update_irq(s);
-                            qemu_log_mask(LOG_UNIMP,
-                                "USBIP: IN EP%u ENABLE maintenance: dummy XferCompl fired\n", ep);
+                            trace_s5l8702_usbotg_in_maintenance(ep);
                         } else {
-                            /* ENABLE without a fresh DIEPDMA/DIEPTSIZ write — ignore. */
+                            /* ENABLE without a fresh DIEPDMA/DIEPTSIZ write - ignore. */
+                            trace_s5l8702_usbotg_in_enable_ignored(ep,
+                                s->usbip_in_pending[ep].pending);
                         }
                     }
                 }
@@ -1185,18 +1367,15 @@ static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr
                         s->out_eps[0].interrupt_status |= USB_EPINT_XferCompl;
                         s->enumeration_phase++;
                         s->gintsts_poll_count = 0;
-                        qemu_log_mask(LOG_UNIMP,
-                            "USB: INEP XferCompl cleared (phase%d->%d), injecting STATUS OUT ZLP\n",
+                        trace_s5l8702_usbotg_status_out_injected(
                             s->enumeration_phase - 1, s->enumeration_phase);
                     } else if (s->enumeration_phase == 7 || s->enumeration_phase == 16) {
                         s->enumeration_phase++;
                         s->gintsts_poll_count = 0;
-                        qemu_log_mask(LOG_UNIMP,
-                            "USB: ZLP IN cleared (phase%d->%d), no STATUS OUT\n",
+                        trace_s5l8702_usbotg_zlp_cleared(
                             s->enumeration_phase - 1, s->enumeration_phase);
                         if (s->enumeration_phase == 17) {
-                            qemu_log_mask(LOG_UNIMP,
-                                "USB: Enumeration complete! MSC stack should be active.\n");
+                            trace_s5l8702_usbotg_enum_complete();
                         }
                     }
                 }
@@ -1233,9 +1412,9 @@ static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr
             s->in_eps[ep].tx_size = val;
             if (ep != 0) {
                 s->usbip_in_tsiz_fresh[ep] = true;
-                qemu_log_mask(LOG_UNIMP, "USBIP: IN EP%u DIEPTSIZ=0x%08x (fresh)\n", ep, val);
+                trace_s5l8702_usbotg_in_tsiz_fresh(ep, val);
             }
-            /* Track that firmware wrote DIEPTSIZ[0] — real transfer setup */
+            /* Track that firmware wrote DIEPTSIZ[0] - real transfer setup */
             if (ep == 0 && s->usbip_ep0_pending && s->usbip_ep0_d2h) {
                 s->usbip_ep0_txsize_armed = true;
             }
@@ -1244,7 +1423,7 @@ static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr
             s->in_eps[ep].dma_address = val;
             if (ep != 0) {
                 s->usbip_in_dma_fresh[ep] = true;
-                qemu_log_mask(LOG_UNIMP, "USBIP: IN EP%u DIEPDMA=0x%08x (fresh)\n", ep, val);
+                trace_s5l8702_usbotg_in_dma_fresh(ep, val);
             }
             break;
         case 0x1C:
@@ -1266,6 +1445,39 @@ static void s5l8702_usbotg_out_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwadd
         case 0x00:
             s->out_eps[ep].control = val;
             s5l8702_usbotg_update_ep(s, &s->out_eps[ep]);
+
+            if (val & USB_EPCON_STALL) {
+                if (!s->usbip_out_ep_halted[ep]) {
+                    trace_s5l8702_usbotg_out_halted(ep);
+                }
+                s->usbip_out_ep_halted[ep] = true;
+                if (s->usbip_device_imported) {
+                    usbip_reject_stalled(s, ep, false);
+                }
+                break;
+            } else if (s->usbip_out_ep_halted[ep]) {
+                trace_s5l8702_usbotg_out_halt_cleared(ep);
+                s->usbip_out_ep_halted[ep] = false;
+            }
+
+            /* Track arming even before a USB/IP client imports the device:
+             * firmware typically arms its bulk OUT EP right after
+             * SET_CONFIGURATION, which can precede the client attach. */
+            if (ep != 0) {
+                if (val & USB_EPCON_DISABLE) {
+                    s->usbip_out_ep_armed[ep] = false;
+                } else if (val & USB_EPCON_ENABLE) {
+                    /* For OUT endpoints ENABLE means "buffer at DOEPDMA is
+                     * ready to receive" - arm unconditionally (level
+                     * semantics; fresh flags kept only for diagnostics). */
+                    s->usbip_out_ep_armed[ep] = true;
+                    trace_s5l8702_usbotg_out_armed(ep, s->out_eps[ep].tx_size & 0x7ffff,
+                                   s->out_eps[ep].dma_address);
+                    s->usbip_out_dma_fresh[ep] = false;
+                    s->usbip_out_tsiz_fresh[ep] = false;
+                    usbip_out_try_deliver(s, ep);
+                }
+            }
             break;
         case 0x08:
             s->out_eps[ep].interrupt_status &= ~val;
@@ -1288,9 +1500,15 @@ static void s5l8702_usbotg_out_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwadd
             break;
         case 0x10:
             s->out_eps[ep].tx_size = val;
+            if (ep != 0) {
+                s->usbip_out_tsiz_fresh[ep] = true;
+            }
             break;
         case 0x14:
             s->out_eps[ep].dma_address = val;
+            if (ep != 0) {
+                s->usbip_out_dma_fresh[ep] = true;
+            }
             /* If OUT EP0 DMA set and USB/IP waiting, try to arm fd handler.
              * This handles the case where DOEPDMA[0] is written after ENUMDONE
              * has already been cleared. */
@@ -1311,6 +1529,8 @@ static void s5l8702_usbotg_write(void *opaque, hwaddr offset, uint64_t val, unsi
     S5L8702UsbOtgState *s = S5L8702_USBOTG(opaque);
     uint32_t value = (uint32_t)val;
 
+    trace_s5l8702_usbotg_reg_write(offset_name(offset), value);
+
     switch (offset) {
         case PCGCCTL:
             s->pcgcctl = value;
@@ -1327,7 +1547,7 @@ static void s5l8702_usbotg_write(void *opaque, hwaddr offset, uint64_t val, unsi
             break;
 
         case GRSTCTL:
-            if (value & 0x1) {  /* Core soft reset — firmware's own init, not a host bus reset */
+            if (value & 0x1) {  /* Core soft reset - firmware's own init, not a host bus reset */
                 s->grstctl = (1 << 31);  /* AHB idle, reset complete */
                 /* Do NOT set GINTSTS USBRST here: this is the firmware's internal
                  * USB core reset, not a USB host bus reset. The ISR (now correctly
@@ -1361,8 +1581,7 @@ static void s5l8702_usbotg_write(void *opaque, hwaddr offset, uint64_t val, unsi
                     s->out_eps[0].interrupt_status |= USB_EPINT_SetUp;
                     s->pcgcctl = 0;
                     s->enumeration_phase = 3;
-                    qemu_log_mask(LOG_UNIMP,
-                        "USB: Injected GET_DESCRIPTOR SETUP at 0x%08x\n", dma_addr);
+                    trace_s5l8702_usbotg_get_desc_injected(dma_addr);
                 } else {
                     /*
                      * USB/IP mode: firmware clearing ENUMDONE signals that it has
@@ -1431,15 +1650,15 @@ static void s5l8702_usbotg_write(void *opaque, hwaddr offset, uint64_t val, unsi
                     /* USB/IP already imported: inject ENUMDONE immediately */
                     s->gintsts |= (1 << 13);
                     s->enumeration_phase = 2;
-                    /* Re-arm fd handler after reset — client is waiting for us */
+                    /* Re-arm fd handler after reset - client is waiting for us */
                     if (s->usbip_client_fd >= 0) {
                         qemu_set_fd_handler(s->usbip_client_fd, usbip_client_readable, NULL, s);
                     }
-                    qemu_log_mask(LOG_UNIMP, "USB: connected + USB/IP active, injecting ENUMDONE\n");
+                    trace_s5l8702_usbotg_connected(1);
                     s5l8702_usbotg_update_irq(s);
                 } else {
                     s->enumeration_phase = 1;
-                    qemu_log_mask(LOG_UNIMP, "USB: connected, phase=1 — will inject ENUMDONE\n");
+                    trace_s5l8702_usbotg_connected(0);
                 }
             }
 
@@ -1580,7 +1799,7 @@ static void s5l8702_usbotg_reset(DeviceState *dev)
      * vhci_hcd to reconnect, creating a reset loop. */
     if (s->usbip_client_fd >= 0) {
         qemu_set_fd_handler(s->usbip_client_fd, NULL, NULL, NULL);
-        /* DO NOT close(s->usbip_client_fd) — keep connection alive */
+        /* DO NOT close(s->usbip_client_fd) - keep connection alive */
     }
     /* Keep s->usbip_device_imported = true (don't reset it) */
     s->usbip_ep0_pending = false;
@@ -1594,12 +1813,15 @@ static void s5l8702_usbotg_reset(DeviceState *dev)
     memset(s->usbip_in_ep_xfercompl_pending, 0, sizeof(s->usbip_in_ep_xfercompl_pending));
     memset(s->usbip_in_dma_fresh, 0, sizeof(s->usbip_in_dma_fresh));
     memset(s->usbip_in_tsiz_fresh, 0, sizeof(s->usbip_in_tsiz_fresh));
-
-    /* Device starts in basic configured state
-     * Firmware will override these values during initialization.
-     * We just ensure device appears to be operating.
-     */
-    s->dsts = (1 << 1);  /* Full speed, not suspended */
+    for (int i = 0; i < USB_NUM_ENDPOINTS; i++) {
+        g_free(s->usbip_out_pending[i].data);
+    }
+    memset(s->usbip_out_pending, 0, sizeof(s->usbip_out_pending));
+    memset(s->usbip_out_ep_armed, 0, sizeof(s->usbip_out_ep_armed));
+    memset(s->usbip_out_dma_fresh, 0, sizeof(s->usbip_out_dma_fresh));
+    memset(s->usbip_out_tsiz_fresh, 0, sizeof(s->usbip_out_tsiz_fresh));
+    memset(s->usbip_in_ep_halted, 0, sizeof(s->usbip_in_ep_halted));
+    memset(s->usbip_out_ep_halted, 0, sizeof(s->usbip_out_ep_halted));
 
     s5l8702_usbotg_update_irq(s);
 }

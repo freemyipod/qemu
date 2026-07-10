@@ -63,6 +63,22 @@ static uint32_t s5l8702_timer_max_val(S5L8702Timer *t) {
     return (t->type == S5L8702_TIMER_TYPE_16) ? 0xFFFF : 0xFFFFFFFF;
 }
 
+/*
+ * Debug knob: scale all timer frequencies by S5L8702_TIMER_MULT (env var).
+ * Lets us test whether guest slowness is tick-period-bound without
+ * changing the timer model itself. Unset or 1 = normal behavior.
+ */
+static uint64_t s5l8702_timer_speed_mult(void)
+{
+    static uint64_t mult;
+    if (mult == 0) {
+        const char *env = getenv("S5L8702_TIMER_MULT");
+        mult = env ? strtoull(env, NULL, 0) : 1;
+        if (mult == 0) mult = 1;
+    }
+    return mult;
+}
+
 static uint64_t s5l8702_timer_get_freq(S5L8702Timer *t) {
     S5L8702TimerCtrlState *s = t->ctrl;
     uint32_t prescale = (t->tpre & 0x3FF) + 1;
@@ -87,7 +103,7 @@ static uint64_t s5l8702_timer_get_freq(S5L8702Timer *t) {
     uint64_t base = clock_get_hz(clk);
     uint64_t denom = (uint64_t)div * prescale;
     if (base == 0 || denom == 0) return 0;
-    return base / denom;
+    return (base / denom) * s5l8702_timer_speed_mult();
 }
 
 static uint32_t s5l8702_timer_current_count(S5L8702Timer *t) {
