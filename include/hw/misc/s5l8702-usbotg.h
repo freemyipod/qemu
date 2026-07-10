@@ -205,11 +205,19 @@ struct S5L8702UsbOtgState {
     int usbip_client_fd;       /* Connected USB/IP client, -1 if none */
     bool usbip_device_imported; /* True after USBIP_OP_REQ_IMPORT accepted */
 
-    /* Pending IN EP requests: host is waiting for device-to-host data */
+    /* Pending IN EP requests: host is waiting for device-to-host data.
+     * A bulk IN URB does not complete on a full max-packet chunk - the
+     * host keeps issuing IN tokens until its buffer is full or the device
+     * sends a short/zero-length packet.  Firmware-armed chunks accumulate
+     * in acc_data and RET_SUBMIT is only sent when one of those conditions
+     * is met, so a device that pushes a 4 KiB read as 8 x 512-byte
+     * transfers completes the URB once, with all 4 KiB. */
     struct {
         bool pending;
         uint32_t seqnum;   /* verbatim from CMD_SUBMIT header, echoed in RET_SUBMIT */
         uint32_t buf_len;  /* host's transfer_buffer_length - cap actual data to this */
+        uint32_t acc_len;  /* bytes accumulated so far across firmware chunks */
+        uint8_t *acc_data; /* g_malloc'd accumulation buffer (buf_len bytes), owned */
     } usbip_in_pending[USB_NUM_ENDPOINTS];
 
     /* Firmware armed IN EP but no CMD_SUBMIT yet - fulfill on arrival */

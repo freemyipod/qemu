@@ -13,6 +13,13 @@
 #define NAND_BYTES_PER_PAGE     2048
 #define NAND_BYTES_PER_SPARE    64
 
+/* The FMI moves page data in fixed 2 KiB DMA/ECC sectors regardless of the
+ * page size: the firmware supplies one destination (or source) address per
+ * sector, and ECC status is reported per sector. */
+#define NAND_SECTOR_SIZE        0x800
+#define NAND_SECTORS_PER_PAGE   (NAND_BYTES_PER_PAGE / NAND_SECTOR_SIZE)
+#define NAND_DESTADDR_QUEUE_LEN 16
+
 #define NAND_CHIP_ID            0xA5D5D589
 #define NAND_NUM_BANKS_INSTALLED 2
 
@@ -21,7 +28,7 @@
  * immediately followed by its spare bytes (mirrors how a real NAND page's
  * data + OOB area sit together). Fixed at compile time for now. */
 #define NAND_SPARE_STRIDE      16
-#define NAND_BANK_CAPACITY     (2ULL * 1024 * 1024 * 1024) /* page-data bytes per bank */
+#define NAND_BANK_CAPACITY     (8ULL * 1024 * 1024 * 1024) /* page-data bytes per bank */
 #define NAND_PAGES_PER_BANK    (NAND_BANK_CAPACITY / NAND_BYTES_PER_PAGE)
 #define NAND_PAGE_RECORD_SIZE  (NAND_BYTES_PER_PAGE + NAND_SPARE_STRIDE)
 #define NAND_BANK_STRIDE       ((uint64_t)NAND_PAGES_PER_BANK * NAND_PAGE_RECORD_SIZE)
@@ -77,9 +84,11 @@ struct S5L8702NandState {
     uint32_t destaddr;
     /* The FMI scatters a page across several 2 KiB-sector destinations: the
      * firmware pushes one DESTADDR per sector before issuing a single page
-     * read. Queue them so the read can deliver each sector to its own target
-     * (an 8 KiB page = 4 sectors). One entry == today's single-target read. */
-    uint32_t destaddr_queue[16];
+     * read. Queue them so the read can deliver each sector to its own target.
+     * DESTBUF auto-increments on real hardware, so the LAST queued target
+     * receives everything remaining in the page (the no-ECC read program
+     * supplies a single target for the whole page). */
+    uint32_t destaddr_queue[NAND_DESTADDR_QUEUE_LEN];
     uint32_t destaddr_queue_count;
     uint32_t rsctrl;
     uint32_t cmd;

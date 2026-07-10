@@ -186,6 +186,9 @@ static void usbip_disconnect_impl(S5L8702UsbOtgState *s, const char *reason)
     s->usbip_ep0_status_pending = false;
     s->usbip_inep_active = false;
     s->usbip_ep0_txsize_armed = false;
+    for (int i = 0; i < USB_NUM_ENDPOINTS; i++) {
+        g_free(s->usbip_in_pending[i].acc_data);
+    }
     memset(s->usbip_in_pending, 0, sizeof(s->usbip_in_pending));
     memset(s->usbip_in_ep_armed, 0, sizeof(s->usbip_in_ep_armed));
     memset(s->usbip_in_ep_xfercompl_pending, 0, sizeof(s->usbip_in_ep_xfercompl_pending));
@@ -241,6 +244,87 @@ static bool usbip_send_ret_submit(S5L8702UsbOtgState *s,
     return usbip_send_ret_submit_status(s, seqnum, data, data_len, 0);
 }
 
+/* Drop a pending IN URB's state, freeing any accumulated data. */
+static void usbip_in_clear_pending(S5L8702UsbOtgState *s, uint32_t ep)
+{
+    g_free(s->usbip_in_pending[ep].acc_data);
+    s->usbip_in_pending[ep].acc_data = NULL;
+    s->usbip_in_pending[ep].acc_len = 0;
+    s->usbip_in_pending[ep].pending = false;
+}
+
+/* Consume one firmware-armed IN transfer into the pending host URB.
+ *
+ * On real USB the host controller keeps issuing IN tokens until either
+ * its URB buffer is full or the device sends a short (< max packet) or
+ * zero-length packet.  A full max-packet chunk therefore does NOT
+ * complete the URB.  Mirror that: append the armed data to the URB's
+ * accumulation buffer, drain DIEPTSIZ/DIEPDMA and fire XferCompl so the
+ * firmware arms its next chunk, and only RET_SUBMIT once the USB-level
+ * completion condition holds.
+ *
+ * Returns false on a socket error (caller must usbip_disconnect). */
+static bool usbip_in_try_fulfill(S5L8702UsbOtgState *s, uint32_t ep)
+{
+    uint32_t cur_txsize = s->in_eps[ep].tx_size;
+    uint32_t dev_len = cur_txsize & 0x7ffff;
+    uint32_t mps = s->in_eps[ep].control & USB_EPCON_MPS_MASK;
+    uint32_t buf_len = s->usbip_in_pending[ep].buf_len;
+    uint32_t acc_len = s->usbip_in_pending[ep].acc_len;
+    uint32_t remaining = buf_len - acc_len;
+    uint32_t len = (dev_len < remaining) ? dev_len : remaining;
+
+    if (len > 0) {
+        if (!s->usbip_in_pending[ep].acc_data) {
+            s->usbip_in_pending[ep].acc_data = g_malloc(buf_len);
+        }
+        cpu_physical_memory_read(s->in_eps[ep].dma_address,
+                                 s->usbip_in_pending[ep].acc_data + acc_len,
+                                 len);
+        acc_len += len;
+        s->usbip_in_pending[ep].acc_len = acc_len;
+    }
+
+    /* Drain tx_size (XferSize bits 18:0, PktCnt bits 28:19) and dma_address
+     * the way hardware would */
+    uint32_t xfer_size = dev_len;
+    uint32_t pkt_cnt = (cur_txsize >> 19) & 0x3ff;
+    if (len >= xfer_size) {
+        xfer_size = 0;
+    } else {
+        xfer_size -= len;
+    }
+    uint32_t pkts = mps ? DIV_ROUND_UP(len, mps) : 1;
+    if (pkts == 0) pkts = 1;  /* ZLP still consumes one packet */
+    pkt_cnt = (pkts >= pkt_cnt) ? 0 : pkt_cnt - pkts;
+    s->in_eps[ep].tx_size = (cur_txsize & ~0x1fffffff) | xfer_size | (pkt_cnt << 19);
+    s->in_eps[ep].dma_address += len;
+
+    /* The arm is consumed either way: fire XferCompl so the firmware's
+     * state machine advances (and arms the next chunk if it has one). */
+    s->usbip_in_ep_armed[ep] = false;
+    s->usbip_in_ep_xfercompl_pending[ep] = true;
+    s->in_eps[ep].interrupt_status |= USB_EPINT_XferCompl;
+    s->in_eps[ep].control &= ~USB_EPCON_ENABLE;
+    s5l8702_usbotg_update_irq(s);
+
+    bool complete = (acc_len >= buf_len) ||   /* host buffer full */
+                    (len == 0) ||             /* ZLP terminates */
+                    (mps == 0) ||
+                    (len % mps) != 0;         /* short packet terminates */
+
+    if (!complete) {
+        trace_s5l8702_usbotg_in_chunk(ep, len, acc_len, buf_len);
+        return true;
+    }
+
+    trace_s5l8702_usbotg_in_complete(ep, acc_len, buf_len);
+    bool ok = usbip_send_ret_submit(s, s->usbip_in_pending[ep].seqnum,
+                                    s->usbip_in_pending[ep].acc_data, acc_len);
+    usbip_in_clear_pending(s, ep);
+    return ok;
+}
+
 /* Firmware stalled an endpoint that has an outstanding host request.
  * Complete the URB with -EPIPE so the host sees the stall immediately
  * (instead of waiting out its 30s URB timeout) and can issue
@@ -261,7 +345,7 @@ static void usbip_reject_stalled(S5L8702UsbOtgState *s, uint32_t ep, bool is_in)
         if (!s->usbip_in_pending[ep].pending) return;
         trace_s5l8702_usbotg_in_stall_reject(ep);
         usbip_send_ret_submit_status(s, s->usbip_in_pending[ep].seqnum, NULL, 0, -EPIPE);
-        s->usbip_in_pending[ep].pending = false;
+        usbip_in_clear_pending(s, ep);
     } else {
         s->usbip_out_ep_armed[ep] = false;
         if (!s->usbip_out_pending[ep].pending) return;
@@ -509,7 +593,10 @@ static void usbip_handle_out_submit(S5L8702UsbOtgState *s,
     }
 
     if (buf_len > 0) {
-        if (buf_len > 65536) {
+        if (buf_len > 1024 * 1024) {
+            /* Same bound as the IN path.  usb-storage batches writes into
+             * URBs of up to 120 KiB, so a 64 KiB cap here tears down the
+             * whole connection on the first big write burst. */
             trace_s5l8702_usbotg_out_too_large(ep, buf_len);
             usbip_disconnect(s);
             return;
@@ -588,44 +675,30 @@ static void usbip_handle_in_submit(S5L8702UsbOtgState *s,
         return;
     }
 
-    if (s->usbip_in_ep_armed[ep]) {
-        /* Firmware already armed the endpoint with fresh DMA data.
-         * usbip_in_ep_armed is only set when DIEPDMA was freshly written,
-         * so the buffer at dma_address is current. Fulfill immediately. */
-        uint32_t dev_len = s->in_eps[ep].tx_size & 0x7ffff;
-        uint32_t len = (buf_len && buf_len < dev_len) ? buf_len : dev_len;
-        if (len > 65536) len = 65536;
-        uint8_t *data = g_malloc0(len + 1);
-        cpu_physical_memory_read(s->in_eps[ep].dma_address, data, len);
-        trace_s5l8702_usbotg_in_immediate(ep, len);
-        usbip_send_ret_submit(s, hdr->seqnum, data, len);
-        g_free(data);
-
-        /* Update tx_size (XferSize bits 18:0, PktCnt bits 28:19) and dma_address */
-        uint32_t xfer_size = (s->in_eps[ep].tx_size & 0x7ffff);
-        uint32_t pkt_cnt = (s->in_eps[ep].tx_size >> 19) & 0x3ff;
-        if (len >= xfer_size) {
-            xfer_size = 0;
-        } else {
-            xfer_size -= len;
-        }
-        if (pkt_cnt > 0) pkt_cnt--;
-        s->in_eps[ep].tx_size = (s->in_eps[ep].tx_size & ~0x1fffffff) | xfer_size | (pkt_cnt << 19);
-        s->in_eps[ep].dma_address += len;
-
-        s->usbip_in_ep_armed[ep] = false;
-        /* Fire XferCompl - next ENABLE will be maintenance, skip it */
-        s->usbip_in_ep_xfercompl_pending[ep] = true;
-        s->in_eps[ep].interrupt_status |= USB_EPINT_XferCompl;
-        /* Clear ENABLE bit - transfer is done */
-        s->in_eps[ep].control &= ~USB_EPCON_ENABLE;
-        s5l8702_usbotg_update_irq(s);
+    if (buf_len > 1024 * 1024) {
+        /* Bound the accumulation buffer; larger URBs than this never
+         * occur for a BOT device (usb-storage caps at 120 KiB). */
+        trace_s5l8702_usbotg_in_too_large(ep, buf_len);
+        usbip_disconnect(s);
         return;
     }
 
     s->usbip_in_pending[ep].pending = true;
     s->usbip_in_pending[ep].seqnum = hdr->seqnum;  /* verbatim */
     s->usbip_in_pending[ep].buf_len = buf_len;
+    s->usbip_in_pending[ep].acc_len = 0;
+    s->usbip_in_pending[ep].acc_data = NULL;
+
+    if (s->usbip_in_ep_armed[ep]) {
+        /* Firmware already armed the endpoint with fresh DMA data.
+         * usbip_in_ep_armed is only set when DIEPDMA was freshly written,
+         * so the buffer at dma_address is current. Consume it now. */
+        trace_s5l8702_usbotg_in_immediate(ep, s->in_eps[ep].tx_size & 0x7ffff);
+        if (!usbip_in_try_fulfill(s, ep)) {
+            usbip_disconnect(s);
+        }
+        return;
+    }
 
     /* The host is polling this endpoint with IN tokens.  On real hardware
      * an IN token to a not-yet-enabled endpoint fires DIEPINT.INTknTXFEmp;
@@ -673,7 +746,7 @@ static void usbip_handle_cmd_unlink(S5L8702UsbOtgState *s, const usbip_header_t 
     for (int i = 0; i < USB_NUM_ENDPOINTS; i++) {
         if (s->usbip_in_pending[i].pending &&
             s->usbip_in_pending[i].seqnum == unlink_seqnum) {
-            s->usbip_in_pending[i].pending = false;
+            usbip_in_clear_pending(s, i);
         }
         if (s->usbip_out_pending[i].pending &&
             s->usbip_out_pending[i].seqnum == unlink_seqnum) {
@@ -1278,7 +1351,6 @@ static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr
                          * machine (it would think data was sent when it wasn't).
                          */
                         uint32_t cur_txsize = s->in_eps[ep].tx_size;
-                        uint32_t cur_dma = s->in_eps[ep].dma_address;
                         bool is_fresh = s->usbip_in_dma_fresh[ep] || s->usbip_in_tsiz_fresh[ep];
 
                         if (is_fresh) {
@@ -1290,41 +1362,14 @@ static void s5l8702_usbotg_in_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwaddr
                             s->usbip_in_ep_xfercompl_pending[ep] = false;
 
                             if (s->usbip_in_pending[ep].pending) {
-                                /* CMD_SUBMIT already waiting - fulfill now. */
-                                uint32_t dev_len = cur_txsize & 0x7ffff;
-                                uint32_t host_len = s->usbip_in_pending[ep].buf_len;
-                                uint32_t len = (host_len && host_len < dev_len) ? host_len : dev_len;
-                                if (len > 65536) len = 65536;
-                                uint8_t *data = g_malloc0(len + 1);
-                                cpu_physical_memory_read(cur_dma, data, len);
-                                trace_s5l8702_usbotg_in_deferred(ep, len);
-                                if (!usbip_send_ret_submit(s, s->usbip_in_pending[ep].seqnum, data, len)) {
-                                    g_free(data);
+                                /* CMD_SUBMIT already waiting - consume this
+                                 * arm into it (completes the URB only on a
+                                 * short packet or a full host buffer). */
+                                trace_s5l8702_usbotg_in_deferred(ep, cur_txsize & 0x7ffff);
+                                if (!usbip_in_try_fulfill(s, ep)) {
                                     usbip_disconnect(s);
                                     return;
                                 }
-                                g_free(data);
-
-                                /* Update tx_size (XferSize bits 18:0, PktCnt bits 28:19) and dma_address */
-                                uint32_t xfer_size = cur_txsize & 0x7ffff;
-                                uint32_t pkt_cnt = (cur_txsize >> 19) & 0x3ff;
-                                if (len >= xfer_size) {
-                                    xfer_size = 0;
-                                } else {
-                                    xfer_size -= len;
-                                }
-                                if (pkt_cnt > 0) pkt_cnt--;
-                                s->in_eps[ep].tx_size = (cur_txsize & ~0x1fffffff) | xfer_size | (pkt_cnt << 19);
-                                s->in_eps[ep].dma_address += len;
-
-                                s->usbip_in_pending[ep].pending = false;
-                                s->usbip_in_ep_armed[ep] = false;
-                                /* Fire XferCompl - next ENABLE will be maintenance, skip it */
-                                s->usbip_in_ep_xfercompl_pending[ep] = true;
-                                s->in_eps[ep].interrupt_status |= USB_EPINT_XferCompl;
-                                /* Clear ENABLE bit - transfer is done */
-                                s->in_eps[ep].control &= ~USB_EPCON_ENABLE;
-                                s5l8702_usbotg_update_irq(s);
                             } else {
                                 /* No CMD_SUBMIT yet - arm.  When CMD_SUBMIT arrives
                                  * it can fulfill immediately. */
@@ -1808,6 +1853,9 @@ static void s5l8702_usbotg_reset(DeviceState *dev)
     s->usbip_ep0_status_pending = false;
     s->usbip_inep_active = false;
     s->usbip_ep0_txsize_armed = false;
+    for (int i = 0; i < USB_NUM_ENDPOINTS; i++) {
+        g_free(s->usbip_in_pending[i].acc_data);
+    }
     memset(s->usbip_in_pending, 0, sizeof(s->usbip_in_pending));
     memset(s->usbip_in_ep_armed, 0, sizeof(s->usbip_in_ep_armed));
     memset(s->usbip_in_ep_xfercompl_pending, 0, sizeof(s->usbip_in_ep_xfercompl_pending));

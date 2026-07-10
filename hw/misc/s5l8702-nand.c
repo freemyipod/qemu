@@ -110,7 +110,7 @@ static void s5l8702_nand_do_program(S5L8702NandState *s) {
 
     uint32_t page = s5l8702_nand_current_page(s);
 
-    const uint32_t sector = 0x800;
+    const uint32_t sector = NAND_SECTOR_SIZE;
     uint32_t n = s->destaddr_queue_count;
     if (n == 0) {
         s->destaddr_queue[0] = s->destaddr;
@@ -122,7 +122,9 @@ static void s5l8702_nand_do_program(S5L8702NandState *s) {
             break;
         }
         uint32_t len = sector;
-        if (off + len > NAND_BYTES_PER_PAGE) {
+        /* DESTBUF auto-increments: the last queued source supplies the
+         * rest of the page (a single source == a whole-page transfer). */
+        if (i == n - 1 || off + len > NAND_BYTES_PER_PAGE) {
             len = NAND_BYTES_PER_PAGE - off;
         }
         address_space_read(&address_space_memory, s->destaddr_queue[i] ^ 0x80000000, MEMTXATTRS_UNSPECIFIED, s->page_buffer + off, len);
@@ -166,10 +168,10 @@ static uint64_t nand_mem_read(void *opaque, hwaddr addr, unsigned size) {
             s5l8702_nand_set_buffered_page(s, page);
 
             /* Scatter the page across the queued 2 KiB-sector destinations.
-             * The firmware programs one DESTADDR per sector we must write 
+             * The firmware programs one DESTADDR per sector we must write
              * each sector to its own target rather than dumping the whole
              * page on the last one. */
-            const uint32_t sector = 0x800;
+            const uint32_t sector = NAND_SECTOR_SIZE;
             uint32_t n = s->destaddr_queue_count;
             if (n == 0) {
                 /* No queued targets (e.g. a single-sector part that didn't
@@ -183,7 +185,10 @@ static uint64_t nand_mem_read(void *opaque, hwaddr addr, unsigned size) {
                     break;
                 }
                 uint32_t len = sector;
-                if (off + len > NAND_BYTES_PER_PAGE) {
+                /* DESTBUF auto-increments: the last queued target receives
+                 * everything remaining in the page (the no-ECC read program
+                 * supplies a single target for the whole page). */
+                if (i == n - 1 || off + len > NAND_BYTES_PER_PAGE) {
                     len = NAND_BYTES_PER_PAGE - off;
                 }
                 address_space_write(&address_space_memory,

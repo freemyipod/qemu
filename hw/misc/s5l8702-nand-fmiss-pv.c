@@ -71,11 +71,24 @@ static uint32_t pv_direct_addr(const FmissPvContext *ctx, int addr_word) {
     return dmem_read(ctx, addr_word);
 }
 
-// we don't need ecc where we're going!
-static void pv_write_result_ok(const FmissPvContext *ctx, int result_ptr_word) {
+static void pv_write_result(const FmissPvContext *ctx, int result_ptr_word,
+                            uint32_t status) {
     uint32_t ptr = dmem_read(ctx, result_ptr_word);
-    guest_write32(ptr, 0);
+    guest_write32(ptr, status);
     dmem_write(ctx, result_ptr_word, ptr + 4);
+}
+
+static uint32_t pv_sectors_per_page(const FmissPvContext *ctx) {
+    uint32_t sectors = dmem_read(ctx, 10);
+    if (sectors != NAND_SECTORS_PER_PAGE) {
+        warn_report_once("s5l8702-nand: firmware set %u sectors/page (DMEM "
+                         "0xD28) but geometry says %u; trusting the firmware",
+                         sectors, (uint32_t)NAND_SECTORS_PER_PAGE);
+    }
+    if (sectors == 0 || sectors > NAND_DESTADDR_QUEUE_LEN) {
+        sectors = NAND_SECTORS_PER_PAGE;
+    }
+    return sectors;
 }
 
 /* -----------------------------------------------------------------------
@@ -132,9 +145,9 @@ static void pv_erase(const FmissPvContext *ctx) {
  *
  * 0xD0C:       row-address (page) list pointer
  * 0xD10/0xD14: bank-id list + translation table
- * 0xD20:       destination pointer list: data buffer, then spare buffer.
- *                We pull the spare bytes through the FIFO words rather
- *                than DMAing them, same as the read/write paths below.
+ * 0xD20:       destination pointer list: a single data-buffer entry for
+ *                the whole page (DESTBUF auto-increments), then the spare
+ *                buffer, pulled through the FIFO words like read/write.
  * -------------------------------------------------------------------- */
 static void pv_read_noecc(const FmissPvContext *ctx) {
     uint32_t bank = pv_next_bank_via_table(ctx);
@@ -168,11 +181,14 @@ static void pv_read_noecc(const FmissPvContext *ctx) {
  * 0xD10/0xD14: bank-id list + translation table
  * 0xD1C:       spare-word destination: a direct address, advanced by 12
  *                bytes (3 FIFO words) after each transfer
- * 0xD20:       data destination pointer list, one entry per transfer
- * 0xD24:       per-sector ECC/status result word list
+ * 0xD20:       data destination pointer list, one entry per 2 KiB sector
+ * 0xD24:       ECC/status result word list, one entry per transfer
+ *                (0x20000000 flags a blank page)
+ * 0xD28:       sectors per page
  * -------------------------------------------------------------------- */
 static void pv_read(const FmissPvContext *ctx) {
     uint32_t count = dmem_read(ctx, 6);
+    uint32_t sectors = pv_sectors_per_page(ctx);
 
     for (uint32_t i = 0; i < count; i++) {
         uint32_t bank = pv_next_bank_via_table(ctx);
@@ -184,8 +200,14 @@ static void pv_read(const FmissPvContext *ctx) {
         ctx->ops->write(ctx->opaque, NAND_FMADDR1, page >> 16, 4);
         ctx->ops->write(ctx->opaque, NAND_CMD, NAND_CMD_READ, 4);
 
-        uint32_t data_dest = pv_consume(ctx, 8);
-        ctx->ops->write(ctx->opaque, NAND_DESTADDR, data_dest, 4);
+        uint32_t data_dest = 0;
+        for (uint32_t sect = 0; sect < sectors; sect++) {
+            uint32_t dest = pv_consume(ctx, 8);
+            if (sect == 0) {
+                data_dest = dest;
+            }
+            ctx->ops->write(ctx->opaque, NAND_DESTADDR, dest, 4);
+        }
         uint32_t spare0 = ctx->ops->read(ctx->opaque, NAND_FMFIFO, 4);
 
         uint32_t spare_dest = pv_direct_addr(ctx, 7);
@@ -196,8 +218,9 @@ static void pv_read(const FmissPvContext *ctx) {
             dmem_write(ctx, 7, spare_dest + 12);
         }
 
-        // no ecc today!
-        pv_write_result_ok(ctx, 9);
+        /* Report the blank flag via 0xC30, which the FTL uses to tell
+         * erased pages from data. */
+        pv_write_result(ctx, 9, ctx->ops->read(ctx->opaque, 0xC30, 4));
 
         trace_s5l8702_fmiss_pv_read(bank, page, data_dest);
     }
@@ -208,33 +231,46 @@ static void pv_read(const FmissPvContext *ctx) {
  *
  * 0xD0C:       row-address (page) list pointer
  * 0xD10/0xD14: bank-id list + translation table
+ * 0xD18:       number of (bank, page) transfers in this call
  * 0xD1C:       spare-word source: a direct address, advanced by 12
  *                bytes (3 FIFO words) after each transfer
- * 0xD20:       data source pointer list (DESTADDR reused as a source
- *                address when programming)
+ * 0xD20:       data source pointer list, one entry per 2 KiB sector
+ *                (DESTADDR reused as a source address when programming)
+ * 0xD28:       sectors per page
  * -------------------------------------------------------------------- */
 static void pv_write(const FmissPvContext *ctx) {
-    uint32_t bank = pv_next_bank_via_table(ctx);
-    pv_select_bank(ctx, bank);
+    uint32_t count = dmem_read(ctx, 6);
+    uint32_t sectors = pv_sectors_per_page(ctx);
 
-    uint32_t data_src = pv_consume(ctx, 8);
-    ctx->ops->write(ctx->opaque, NAND_DESTADDR, data_src, 4);
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t bank = pv_next_bank_via_table(ctx);
+        pv_select_bank(ctx, bank);
 
-    uint32_t spare_src = pv_direct_addr(ctx, 7);
-    if (spare_src) {
-        ctx->ops->write(ctx->opaque, NAND_FMFIFO, guest_read32(spare_src), 4);
-        ctx->ops->write(ctx->opaque, 0x64, guest_read32(spare_src + 4), 4);
-        ctx->ops->write(ctx->opaque, 0x68, guest_read32(spare_src + 8), 4);
-        dmem_write(ctx, 7, spare_src + 12);
+        uint32_t data_src = 0;
+        for (uint32_t sect = 0; sect < sectors; sect++) {
+            uint32_t src = pv_consume(ctx, 8);
+            if (sect == 0) {
+                data_src = src;
+            }
+            ctx->ops->write(ctx->opaque, NAND_DESTADDR, src, 4);
+        }
+
+        uint32_t spare_src = pv_direct_addr(ctx, 7);
+        if (spare_src) {
+            ctx->ops->write(ctx->opaque, NAND_FMFIFO, guest_read32(spare_src), 4);
+            ctx->ops->write(ctx->opaque, 0x64, guest_read32(spare_src + 4), 4);
+            ctx->ops->write(ctx->opaque, 0x68, guest_read32(spare_src + 8), 4);
+            dmem_write(ctx, 7, spare_src + 12);
+        }
+
+        uint32_t page = pv_consume(ctx, 3);
+        ctx->ops->write(ctx->opaque, NAND_FMANUM, 4, 4);
+        ctx->ops->write(ctx->opaque, NAND_FMADDR0, page << 16, 4);
+        ctx->ops->write(ctx->opaque, NAND_FMADDR1, page >> 16, 4);
+        ctx->ops->write(ctx->opaque, NAND_CMD, NAND_CMD_PROGRAM_CONFIRM, 4);
+
+        trace_s5l8702_fmiss_pv_write(bank, page, data_src);
     }
-
-    uint32_t page = pv_consume(ctx, 3);
-    ctx->ops->write(ctx->opaque, NAND_FMANUM, 4, 4);
-    ctx->ops->write(ctx->opaque, NAND_FMADDR0, page << 16, 4);
-    ctx->ops->write(ctx->opaque, NAND_FMADDR1, page >> 16, 4);
-    ctx->ops->write(ctx->opaque, NAND_CMD, NAND_CMD_PROGRAM_CONFIRM, 4);
-
-    trace_s5l8702_fmiss_pv_write(bank, page, data_src);
 }
 
 /* -----------------------------------------------------------------------
@@ -249,12 +285,16 @@ static void pv_noop(const FmissPvContext *ctx) {}
  * known program's bytecode.
  * -------------------------------------------------------------------- */
 static const FmissPvEntry fmiss_pv_table[] = {
-    { 0x8D331631EC7EB0A9ULL, "erase",       pv_erase },
-    { 0x50D27BA0981C03DCULL, "read",        pv_read },
-    { 0xB1325C82A084ECFCULL, "read_id",     pv_read_id },
-    { 0xA9756E8B98D35304ULL, "read_noecc",  pv_read_noecc },
-    { 0x4A809424EDFF2B18ULL, "write",       pv_write },
-    { 0xFC5D27502C385000ULL, "noop",        pv_noop },
+    { 0x8D331631EC7EB0A9ULL, "erase",       pv_erase,      false },
+    { 0x50D27BA0981C03DCULL, "read",        pv_read,       false },
+    { 0xB1325C82A084ECFCULL, "read_id",     pv_read_id,    false },
+    { 0xA9756E8B98D35304ULL, "read_noecc",  pv_read_noecc, false },
+    { 0x4A809424EDFF2B18ULL, "write",       pv_write,      true },
+    { 0xF4CEA8272152513DULL, "write_cache",                  pv_write, true },
+    { 0xCC463A75F535E0F2ULL, "write_2plane",                 pv_write, true },
+    { 0x28C1B506523C4367ULL, "write_2plane_cache_interleave", pv_write, true },
+    { 0x3C7A54540F04F991ULL, "write_cache_interleave",       pv_write, true },
+    { 0xFC5D27502C385000ULL, "noop",        pv_noop,       false },
 };
 
 void fmiss_pv_dispatch(const FmissPvContext *ctx) {
@@ -262,7 +302,7 @@ void fmiss_pv_dispatch(const FmissPvContext *ctx) {
 
     for (size_t i = 0; i < ARRAY_SIZE(fmiss_pv_table); i++) {
         if (fmiss_pv_table[i].hash == hash) {
-            trace_s5l8702_fmiss_pv_matched(fmiss_pv_table[i].name, hash);
+            // trace_s5l8702_fmiss_pv_matched(fmiss_pv_table[i].name, hash);
             fmiss_pv_table[i].handler(ctx);
             return;
         }
