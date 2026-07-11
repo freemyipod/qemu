@@ -73,6 +73,8 @@ int64_t co_wrapper_mixed blk_getlength(BlockBackend *blk);
 void coroutine_fn blk_co_get_geometry(BlockBackend *blk,
                                       uint64_t *nb_sectors_ptr);
 void blk_get_geometry(BlockBackend *blk, uint64_t *nb_sectors_ptr);
+int blk_get_header_ext(BlockBackend *blk, uint32_t magic,
+                       void *buf, size_t buf_size);
 
 int64_t coroutine_fn blk_co_nb_sectors(BlockBackend *blk);
 int64_t blk_nb_sectors(BlockBackend *blk);

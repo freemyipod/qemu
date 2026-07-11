@@ -10,28 +10,49 @@
 #include "hw/misc/s5l8702-nand-fmiss.h"
 
 #define NAND_NUM_BANKS          8
-#define NAND_BYTES_PER_PAGE     2048
 #define NAND_BYTES_PER_SPARE    64
 
 /* The FMI moves page data in fixed 2 KiB DMA/ECC sectors regardless of the
  * page size: the firmware supplies one destination (or source) address per
  * sector, and ECC status is reported per sector. */
 #define NAND_SECTOR_SIZE        0x800
-#define NAND_SECTORS_PER_PAGE   (NAND_BYTES_PER_PAGE / NAND_SECTOR_SIZE)
 #define NAND_DESTADDR_QUEUE_LEN 16
 
 #define NAND_CHIP_ID            0xA5D5D589
-#define NAND_NUM_BANKS_INSTALLED 2
 
 /* Unified backing-image geometry: banks and their spare bytes live
  * interwoven in a single BlockBackend-backed image, one page's data
  * immediately followed by its spare bytes (mirrors how a real NAND page's
- * data + OOB area sit together). Fixed at compile time for now. */
-#define NAND_SPARE_STRIDE      16
-#define NAND_BANK_CAPACITY     (8ULL * 1024 * 1024 * 1024) /* page-data bytes per bank */
-#define NAND_PAGES_PER_BANK    (NAND_BANK_CAPACITY / NAND_BYTES_PER_PAGE)
-#define NAND_PAGE_RECORD_SIZE  (NAND_BYTES_PER_PAGE + NAND_SPARE_STRIDE)
-#define NAND_BANK_STRIDE       ((uint64_t)NAND_PAGES_PER_BANK * NAND_PAGE_RECORD_SIZE)
+ * data + OOB area sit together). The geometry is stored in the image itself
+ * as a qcow2 header extension (create/stamp images with nand-image.py). */
+#define NAND_GEOM_EXT_MAGIC     0x4E414E44 /* "NAND" */
+#define NAND_GEOM_EXT_VERSION   2
+
+/* On-disk payload of the geometry header extension; all fields big-endian.
+ * Version 1 ends at bank_capacity (no nand_id); version 2 appends nand_id.
+ * s5l8702_nand_load_geometry() accepts both, defaulting nand_id for v1. */
+typedef struct QEMU_PACKED Qcow2NandGeometry {
+    uint32_t version;         /* NAND_GEOM_EXT_VERSION */
+    uint32_t page_size;       /* data bytes per page, e.g. 2048 */
+    uint32_t spare_stride;    /* spare bytes stored per page in the image */
+    uint32_t pages_per_block; /* pages erased together */
+    uint32_t num_banks;       /* installed banks */
+    uint64_t bank_capacity;   /* page-data bytes per bank */
+    uint32_t nand_id;         /* chip ID reported by NAND_CMD_ID, v2+ */
+} Qcow2NandGeometry;
+
+/* Runtime geometry, decoded from the header extension at realize time. */
+typedef struct S5L8702NandGeometry {
+    uint32_t bytes_per_page;
+    uint32_t spare_stride;
+    uint32_t pages_per_block;
+    uint32_t num_banks_installed;
+    uint32_t sectors_per_page;
+    uint64_t pages_per_bank;
+    uint64_t page_record_size;  /* bytes_per_page + spare_stride */
+    uint64_t bank_stride;       /* pages_per_bank * page_record_size */
+    uint32_t nand_id;           /* chip ID reported by NAND_CMD_ID */
+} S5L8702NandGeometry;
 
 /* NAND register offsets within the 0x38A00000 MMIO region */
 #define NAND_FMCTRL0    0x0
@@ -57,7 +78,6 @@
 #define NAND_CMD_ERASE_CONFIRM   0xD0
 #define NAND_CMD_PROGRAM_SETUP   0x80
 #define NAND_CMD_PROGRAM_CONFIRM 0x10
-#define NAND_PAGES_PER_BLOCK 128
 
 #define S5L8702_NAND_BASE   0x38A00000
 #define S5L8702_NAND_SIZE   0x1000
@@ -114,8 +134,9 @@ struct S5L8702NandState {
     QemuMutex lock;
 
     /* "drive" qdev property: the unified NAND image (all banks + spares
-     * interwoven). See NAND_BANK_STRIDE et al. */
+     * interwoven). Its geometry header extension fills in `geo`. */
     BlockBackend *blk;
+    S5L8702NandGeometry geo;
 
     bool fmiss_enable; // do we emulate the FMISS or paravirtualize it?
 

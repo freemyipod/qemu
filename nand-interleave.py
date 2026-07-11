@@ -32,8 +32,11 @@ Usage:
     ./nand-interleave.py --blank -o nand-base.raw \\
         --page-size 8192 --spare-stride 32 --bank-capacity 4G --num-banks 4
 
-Then layer a QCOW2 overlay the standard way:
-    qemu-img create -f qcow2 -b nand-base.raw -F raw nand-overlay.qcow2
+Then layer a QCOW2 overlay with the geometry header extension the device
+now requires (see nand-image.py; raw backing images carry no extension, so
+pass the geometry flags):
+    ./nand-image.py overlay nand.qcow2 -b nand-base.raw -F raw \\
+        --page-size 2048 --spare-stride 16 --bank-capacity 2G --num-banks 2
 """
 
 import argparse

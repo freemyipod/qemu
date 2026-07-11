@@ -18,6 +18,7 @@ typedef struct FmissPvContext {
     void *opaque;
     const FmissNandOps *ops;
     uint32_t program_addr;
+    uint32_t sectors_per_page;
 } FmissPvContext;
 
 typedef void (*fmiss_pv_handler_fn)(const FmissPvContext *ctx);

@@ -80,13 +80,13 @@ static void pv_write_result(const FmissPvContext *ctx, int result_ptr_word,
 
 static uint32_t pv_sectors_per_page(const FmissPvContext *ctx) {
     uint32_t sectors = dmem_read(ctx, 10);
-    if (sectors != NAND_SECTORS_PER_PAGE) {
+    if (sectors != ctx->sectors_per_page) {
         warn_report_once("s5l8702-nand: firmware set %u sectors/page (DMEM "
                          "0xD28) but geometry says %u; trusting the firmware",
-                         sectors, (uint32_t)NAND_SECTORS_PER_PAGE);
+                         sectors, ctx->sectors_per_page);
     }
     if (sectors == 0 || sectors > NAND_DESTADDR_QUEUE_LEN) {
-        sectors = NAND_SECTORS_PER_PAGE;
+        sectors = ctx->sectors_per_page;
     }
     return sectors;
 }

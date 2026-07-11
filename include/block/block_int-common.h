@@ -704,6 +704,15 @@ struct BlockDriver {
 
     ImageInfoSpecific *(*bdrv_get_specific_info)(BlockDriverState *bs,
                                                  Error **errp);
+
+    /*
+     * Look up a format-specific header extension by magic (e.g. a qcow2
+     * header extension). Copies at most @buf_size bytes of the extension
+     * payload into @buf and returns the full payload length, or -ENOENT
+     * if the image carries no such extension.
+     */
+    int (*bdrv_get_header_ext)(BlockDriverState *bs, uint32_t magic,
+                               void *buf, size_t buf_size);
     BlockStatsSpecific *(*bdrv_get_specific_stats)(BlockDriverState *bs);
 
     int coroutine_fn GRAPH_RDLOCK_PTR (*bdrv_co_save_vmstate)(

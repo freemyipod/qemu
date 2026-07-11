@@ -6382,6 +6382,27 @@ ImageInfoSpecific *bdrv_get_specific_info(BlockDriverState *bs,
     return NULL;
 }
 
+int bdrv_get_header_ext(BlockDriverState *bs, uint32_t magic,
+                        void *buf, size_t buf_size)
+{
+    IO_CODE();
+
+    /*
+     * Walk down the backing/filter chain so an overlay without the
+     * extension inherits it from a stamped backing image.
+     */
+    for (; bs; bs = bdrv_filter_or_cow_bs(bs)) {
+        BlockDriver *drv = bs->drv;
+        if (drv && drv->bdrv_get_header_ext) {
+            int ret = drv->bdrv_get_header_ext(bs, magic, buf, buf_size);
+            if (ret != -ENOENT) {
+                return ret;
+            }
+        }
+    }
+    return -ENOENT;
+}
+
 BlockStatsSpecific *bdrv_get_specific_stats(BlockDriverState *bs)
 {
     BlockDriver *drv = bs->drv;

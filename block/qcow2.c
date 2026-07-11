@@ -5156,6 +5156,21 @@ err:
     return NULL;
 }
 
+static int qcow2_get_header_ext(BlockDriverState *bs, uint32_t magic,
+                                void *buf, size_t buf_size)
+{
+    BDRVQcow2State *s = bs->opaque;
+    Qcow2UnknownHeaderExtension *uext;
+
+    QLIST_FOREACH(uext, &s->unknown_header_ext, next) {
+        if (uext->magic == magic) {
+            memcpy(buf, uext->data, MIN(buf_size, uext->len));
+            return uext->len;
+        }
+    }
+    return -ENOENT;
+}
+
 static int coroutine_fn
 qcow2_co_get_info(BlockDriverState *bs, BlockDriverInfo *bdi)
 {
@@ -6093,6 +6108,7 @@ BlockDriver bdrv_qcow2 = {
     .bdrv_measure           = qcow2_measure,
     .bdrv_co_get_info       = qcow2_co_get_info,
     .bdrv_get_specific_info = qcow2_get_specific_info,
+    .bdrv_get_header_ext    = qcow2_get_header_ext,
 
     .bdrv_co_save_vmstate   = qcow2_co_save_vmstate,
     .bdrv_co_load_vmstate   = qcow2_co_load_vmstate,

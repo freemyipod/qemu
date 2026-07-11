@@ -1615,6 +1615,18 @@ int64_t coroutine_fn blk_co_getlength(BlockBackend *blk)
     return bdrv_co_getlength(blk_bs(blk));
 }
 
+int blk_get_header_ext(BlockBackend *blk, uint32_t magic,
+                       void *buf, size_t buf_size)
+{
+    BlockDriverState *bs = blk_bs(blk);
+    IO_CODE();
+
+    if (!bs) {
+        return -ENOMEDIUM;
+    }
+    return bdrv_get_header_ext(bs, magic, buf, buf_size);
+}
+
 int64_t coroutine_fn blk_co_nb_sectors(BlockBackend *blk)
 {
     BlockDriverState *bs = blk_bs(blk);

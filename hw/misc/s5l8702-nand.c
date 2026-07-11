@@ -41,12 +41,12 @@ static int get_bank(S5L8702NandState *s) {
 
 /* Offsets into the unified backing image: banks and their spare bytes are
  * interwoven, one page's data immediately followed by its spare bytes. */
-static uint64_t nand_page_data_offset(uint32_t bank, uint32_t page) {
-    return (uint64_t)bank * NAND_BANK_STRIDE + (uint64_t)page * NAND_PAGE_RECORD_SIZE;
+static uint64_t nand_page_data_offset(S5L8702NandState *s, uint32_t bank, uint32_t page) {
+    return (uint64_t)bank * s->geo.bank_stride + (uint64_t)page * s->geo.page_record_size;
 }
 
-static uint64_t nand_page_spare_offset(uint32_t bank, uint32_t page) {
-    return nand_page_data_offset(bank, page) + NAND_BYTES_PER_PAGE;
+static uint64_t nand_page_spare_offset(S5L8702NandState *s, uint32_t bank, uint32_t page) {
+    return nand_page_data_offset(s, bank, page) + s->geo.bytes_per_page;
 }
 
 void s5l8702_nand_set_buffered_page(S5L8702NandState *s, uint32_t page) {
@@ -55,13 +55,13 @@ void s5l8702_nand_set_buffered_page(S5L8702NandState *s, uint32_t page) {
         trace_s5l8702_nand_warn_no_bank(page, s->reading_multiple_pages);
         return;
     }
-    if (!s->blk || (uint32_t)bank >= NAND_NUM_BANKS_INSTALLED) {
+    if (!s->blk || (uint32_t)bank >= s->geo.num_banks_installed) {
         return;
     }
 
     if ((uint32_t)bank != s->buffered_bank || page != s->buffered_page) {
-        blk_pread(s->blk, nand_page_data_offset(bank, page), NAND_BYTES_PER_PAGE, s->page_buffer, 0);
-        blk_pread(s->blk, nand_page_spare_offset(bank, page), 12, s->page_spare_buffer.bytes, 0);
+        blk_pread(s->blk, nand_page_data_offset(s, bank, page), s->geo.bytes_per_page, s->page_buffer, 0);
+        blk_pread(s->blk, nand_page_spare_offset(s, bank, page), 12, s->page_spare_buffer.bytes, 0);
 
         s->buffered_page = page;
         s->buffered_bank = bank;
@@ -79,31 +79,31 @@ static uint32_t s5l8702_nand_current_page(S5L8702NandState *s) {
 
 static void s5l8702_nand_do_erase(S5L8702NandState *s) {
     int bank = get_bank(s);
-    if (bank == -1 || !s->blk || (uint32_t)bank >= NAND_NUM_BANKS_INSTALLED) {
+    if (bank == -1 || !s->blk || (uint32_t)bank >= s->geo.num_banks_installed) {
         return;
     }
 
     uint32_t block = s->fmaddr0;
-    uint32_t page0 = block * NAND_PAGES_PER_BLOCK;
+    uint32_t page0 = block * s->geo.pages_per_block;
 
-    uint8_t erased_record[NAND_PAGE_RECORD_SIZE];
-    memset(erased_record, 0xff, sizeof(erased_record));
+    g_autofree uint8_t *erased_record = g_malloc(s->geo.page_record_size);
+    memset(erased_record, 0xff, s->geo.page_record_size);
 
     qemu_mutex_lock(&s->lock);
-    for (uint32_t i = 0; i < NAND_PAGES_PER_BLOCK; i++) {
-        blk_pwrite(s->blk, nand_page_data_offset(bank, page0 + i), sizeof(erased_record), erased_record, 0);
+    for (uint32_t i = 0; i < s->geo.pages_per_block; i++) {
+        blk_pwrite(s->blk, nand_page_data_offset(s, bank, page0 + i), s->geo.page_record_size, erased_record, 0);
     }
     qemu_mutex_unlock(&s->lock);
 
     if (s->buffered_bank == (uint32_t)bank &&
-        s->buffered_page >= page0 && s->buffered_page < page0 + NAND_PAGES_PER_BLOCK) {
+        s->buffered_page >= page0 && s->buffered_page < page0 + s->geo.pages_per_block) {
         s->buffered_page = -1;
     }
 }
 
 static void s5l8702_nand_do_program(S5L8702NandState *s) {
     int bank = get_bank(s);
-    if (bank == -1 || !s->blk || (uint32_t)bank >= NAND_NUM_BANKS_INSTALLED) {
+    if (bank == -1 || !s->blk || (uint32_t)bank >= s->geo.num_banks_installed) {
         s->destaddr_queue_count = 0;
         return;
     }
@@ -118,22 +118,22 @@ static void s5l8702_nand_do_program(S5L8702NandState *s) {
     }
     for (uint32_t i = 0; i < n; i++) {
         uint32_t off = i * sector;
-        if (off >= NAND_BYTES_PER_PAGE) {
+        if (off >= s->geo.bytes_per_page) {
             break;
         }
         uint32_t len = sector;
         /* DESTBUF auto-increments: the last queued source supplies the
          * rest of the page (a single source == a whole-page transfer). */
-        if (i == n - 1 || off + len > NAND_BYTES_PER_PAGE) {
-            len = NAND_BYTES_PER_PAGE - off;
+        if (i == n - 1 || off + len > s->geo.bytes_per_page) {
+            len = s->geo.bytes_per_page - off;
         }
         address_space_read(&address_space_memory, s->destaddr_queue[i] ^ 0x80000000, MEMTXATTRS_UNSPECIFIED, s->page_buffer + off, len);
     }
     s->destaddr_queue_count = 0;
 
     qemu_mutex_lock(&s->lock);
-    blk_pwrite(s->blk, nand_page_data_offset(bank, page), NAND_BYTES_PER_PAGE, s->page_buffer, 0);
-    blk_pwrite(s->blk, nand_page_spare_offset(bank, page), 12, s->page_spare_buffer.bytes, 0);
+    blk_pwrite(s->blk, nand_page_data_offset(s, bank, page), s->geo.bytes_per_page, s->page_buffer, 0);
+    blk_pwrite(s->blk, nand_page_spare_offset(s, bank, page), 12, s->page_spare_buffer.bytes, 0);
     qemu_mutex_unlock(&s->lock);
 
     s->buffered_bank = bank;
@@ -181,15 +181,15 @@ static uint64_t nand_mem_read(void *opaque, hwaddr addr, unsigned size) {
             }
             for (uint32_t i = 0; i < n; i++) {
                 uint32_t off = i * sector;
-                if (off >= NAND_BYTES_PER_PAGE) {
+                if (off >= s->geo.bytes_per_page) {
                     break;
                 }
                 uint32_t len = sector;
                 /* DESTBUF auto-increments: the last queued target receives
                  * everything remaining in the page (the no-ECC read program
                  * supplies a single target for the whole page). */
-                if (i == n - 1 || off + len > NAND_BYTES_PER_PAGE) {
-                    len = NAND_BYTES_PER_PAGE - off;
+                if (i == n - 1 || off + len > s->geo.bytes_per_page) {
+                    len = s->geo.bytes_per_page - off;
                 }
                 address_space_write(&address_space_memory,
                                     s->destaddr_queue[i] ^ 0x80000000,
@@ -213,7 +213,7 @@ static uint64_t nand_mem_read(void *opaque, hwaddr addr, unsigned size) {
         if (s->cmd == NAND_CMD_ID) {
             int bank = get_bank(s);
             trace_s5l8702_nand_reg_id_read(bank);
-            return (bank < NAND_NUM_BANKS_INSTALLED) ? NAND_CHIP_ID : 0;
+            return (bank >= 0 && (uint32_t)bank < s->geo.num_banks_installed) ? s->geo.nand_id : 0;
         }
         return 0xdeadbeef;
 
@@ -247,7 +247,7 @@ static uint64_t nand_mem_read(void *opaque, hwaddr addr, unsigned size) {
                 return 0;
             }
         }
-        for (uint32_t i = 0; i < NAND_BYTES_PER_PAGE; i++) {
+        for (uint32_t i = 0; i < s->geo.bytes_per_page; i++) {
             if (s->page_buffer[i] != 0xFF) {
                 trace_s5l8702_nand_reg_ecc_status(0);
                 return 0;
@@ -325,15 +325,15 @@ static void nand_mem_write(void *opaque, hwaddr addr, uint64_t val, unsigned siz
         if (!s->is_writing) {
             break;
         }
-        ((uint32_t *)s->page_buffer)[(NAND_BYTES_PER_PAGE - s->fmdnum) / 4] = val;
+        ((uint32_t *)s->page_buffer)[(s->geo.bytes_per_page - s->fmdnum) / 4] = val;
         s->fmdnum -= 4;
         if (s->fmdnum == 0) {
             s->is_writing = false;
             /* Page write complete: flush to the backing image */
             qemu_mutex_lock(&s->lock);
-            if (s->blk && s->buffered_bank < NAND_NUM_BANKS_INSTALLED) {
+            if (s->blk && s->buffered_bank < s->geo.num_banks_installed) {
                 printf("[NAND] Writing page: bank=%d, page=0x%x\n", s->buffered_bank, s->buffered_page);
-                blk_pwrite(s->blk, nand_page_data_offset(s->buffered_bank, s->buffered_page), NAND_BYTES_PER_PAGE, s->page_buffer, 0);
+                blk_pwrite(s->blk, nand_page_data_offset(s, s->buffered_bank, s->buffered_page), s->geo.bytes_per_page, s->page_buffer, 0);
             }
             qemu_mutex_unlock(&s->lock);
         }
@@ -375,9 +375,10 @@ static void nand_mem_write(void *opaque, hwaddr addr, uint64_t val, unsigned siz
                 fmiss_vm_execute(&nand_fmiss_ops, opaque, &s->fmiss_vm);
             } else {
                 FmissPvContext pv_ctx = {
-                    .opaque       = opaque,
-                    .ops          = &nand_fmiss_ops,
-                    .program_addr = s->fmi_program,
+                    .opaque           = opaque,
+                    .ops              = &nand_fmiss_ops,
+                    .program_addr     = s->fmi_program,
+                    .sectors_per_page = s->geo.sectors_per_page,
                 };
                 fmiss_pv_dispatch(&pv_ctx);
             }
@@ -414,9 +415,6 @@ static void s5l8702_nand_init(Object *obj) {
     sysbus_init_mmio(sbd, &s->iomem);
     sysbus_init_irq(sbd, &s->irq);
 
-    s->page_buffer = g_malloc(NAND_BYTES_PER_PAGE);
-    s->page_spare_buffer.bytes = g_malloc(NAND_BYTES_PER_SPARE);
-    memset(s->page_spare_buffer.bytes, 0xff, NAND_BYTES_PER_SPARE);
     s->buffered_page = -1;
     s->buffered_bank = -1;
 
@@ -425,17 +423,123 @@ static void s5l8702_nand_init(Object *obj) {
     qemu_mutex_init(&s->lock);
 }
 
+/* Geometry used when no drive is attached (stub mode), matching the layout
+ * historically compiled in. Never used to address a backing image. */
+static const S5L8702NandGeometry nand_stub_geometry = {
+    .bytes_per_page      = 2048,
+    .spare_stride        = 16,
+    .pages_per_block     = 128,
+    .num_banks_installed = 2,
+    .nand_id             = NAND_CHIP_ID,
+};
+
+static bool s5l8702_nand_load_geometry(S5L8702NandState *s, Error **errp) {
+    Qcow2NandGeometry ext;
+    memset(&ext, 0, sizeof(ext));
+    int ret = blk_get_header_ext(s->blk, NAND_GEOM_EXT_MAGIC, &ext, sizeof(ext));
+
+    if (ret == -ENOENT) {
+        error_setg(errp, "NAND image '%s' has no geometry header extension; "
+                   "create it with nand-image.py, or stamp an existing image "
+                   "with 'nand-image.py stamp'", blk_name(s->blk));
+        return false;
+    }
+    if (ret < 0) {
+        error_setg_errno(errp, -ret, "failed to read NAND geometry header extension");
+        return false;
+    }
+
+    uint32_t version = be32_to_cpu(ext.version);
+    /* v1 images predate nand_id and are shorter (no trailing field); accept
+     * them and fall back to the compiled-in chip ID. */
+    size_t min_len = (version == 1) ? offsetof(Qcow2NandGeometry, nand_id)
+                                     : sizeof(ext);
+    if (version != 1 && version != NAND_GEOM_EXT_VERSION) {
+        error_setg(errp, "unsupported NAND geometry extension version %u", version);
+        return false;
+    }
+    if ((size_t)ret < min_len) {
+        error_setg(errp, "NAND geometry header extension too short (%d bytes)", ret);
+        return false;
+    }
+
+    S5L8702NandGeometry *g = &s->geo;
+    g->bytes_per_page      = be32_to_cpu(ext.page_size);
+    g->spare_stride        = be32_to_cpu(ext.spare_stride);
+    g->pages_per_block     = be32_to_cpu(ext.pages_per_block);
+    g->num_banks_installed = be32_to_cpu(ext.num_banks);
+    g->nand_id             = (version >= 2) ? be32_to_cpu(ext.nand_id) : NAND_CHIP_ID;
+    uint64_t bank_capacity = be64_to_cpu(ext.bank_capacity);
+
+    if (g->bytes_per_page == 0 || g->bytes_per_page % NAND_SECTOR_SIZE != 0) {
+        error_setg(errp, "NAND page size %u is not a multiple of the %u-byte "
+                   "FMI sector", g->bytes_per_page, (uint32_t)NAND_SECTOR_SIZE);
+        return false;
+    }
+    if (g->spare_stride < 12) {
+        error_setg(errp, "NAND spare stride %u is too small (the controller "
+                   "stores 12 metadata bytes per page)", g->spare_stride);
+        return false;
+    }
+    if (g->pages_per_block == 0) {
+        error_setg(errp, "NAND pages-per-block must be non-zero");
+        return false;
+    }
+    if (g->num_banks_installed == 0 || g->num_banks_installed > NAND_NUM_BANKS) {
+        error_setg(errp, "NAND bank count %u out of range (1..%u)",
+                   g->num_banks_installed, (uint32_t)NAND_NUM_BANKS);
+        return false;
+    }
+    if (bank_capacity == 0 || bank_capacity % g->bytes_per_page != 0) {
+        error_setg(errp, "NAND bank capacity %" PRIu64 " is not a multiple of "
+                   "the page size %u", bank_capacity, g->bytes_per_page);
+        return false;
+    }
+
+    g->sectors_per_page = g->bytes_per_page / NAND_SECTOR_SIZE;
+    g->pages_per_bank   = bank_capacity / g->bytes_per_page;
+    g->page_record_size = (uint64_t)g->bytes_per_page + g->spare_stride;
+    g->bank_stride      = g->pages_per_bank * g->page_record_size;
+
+    int64_t len = blk_getlength(s->blk);
+    if (len < 0) {
+        error_setg_errno(errp, -len, "failed to get NAND image length");
+        return false;
+    }
+    uint64_t required = g->bank_stride * g->num_banks_installed;
+    if ((uint64_t)len < required) {
+        error_setg(errp, "NAND image is %" PRId64 " bytes but the geometry "
+                   "extension describes %" PRIu64 " bytes "
+                   "(%u banks * %" PRIu64 " pages * %" PRIu64 "-byte records)",
+                   len, required, g->num_banks_installed, g->pages_per_bank,
+                   g->page_record_size);
+        return false;
+    }
+
+    return true;
+}
+
 static void s5l8702_nand_realize(DeviceState *dev, Error **errp) {
     S5L8702NandState *s = S5L8702_NAND(dev);
     trace_s5l8702_nand_realize(s->blk ? blk_name(s->blk) : "(none)");
 
     if (!s->blk) {
         /* No drive attached: operate without backing storage (stub mode) */
-        return;
+        s->geo = nand_stub_geometry;
+        s->geo.sectors_per_page = s->geo.bytes_per_page / NAND_SECTOR_SIZE;
+        s->geo.page_record_size = s->geo.bytes_per_page + s->geo.spare_stride;
+    } else {
+        if (!s5l8702_nand_load_geometry(s, errp)) {
+            return;
+        }
+
+        uint64_t perm = BLK_PERM_CONSISTENT_READ | (blk_supports_write_perm(s->blk) ? BLK_PERM_WRITE : 0);
+        if (blk_set_perm(s->blk, perm, BLK_PERM_ALL, errp) < 0) return;
     }
 
-    uint64_t perm = BLK_PERM_CONSISTENT_READ | (blk_supports_write_perm(s->blk) ? BLK_PERM_WRITE : 0);
-    if (blk_set_perm(s->blk, perm, BLK_PERM_ALL, errp) < 0) return;
+    s->page_buffer = g_malloc(s->geo.bytes_per_page);
+    s->page_spare_buffer.bytes = g_malloc(NAND_BYTES_PER_SPARE);
+    memset(s->page_spare_buffer.bytes, 0xff, NAND_BYTES_PER_SPARE);
 }
 
 static void s5l8702_nand_reset(DeviceState *dev) {
