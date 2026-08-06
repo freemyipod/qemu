@@ -61,7 +61,11 @@ void s5l8702_nand_set_buffered_page(S5L8702NandState *s, uint32_t page) {
 
     if ((uint32_t)bank != s->buffered_bank || page != s->buffered_page) {
         blk_pread(s->blk, nand_page_data_offset(s, bank, page), s->geo.bytes_per_page, s->page_buffer, 0);
-        blk_pread(s->blk, nand_page_spare_offset(s, bank, page), 12, s->page_spare_buffer.bytes, 0);
+        /* Read the full spare record (image's spare_stride), not just the
+         * 12 metadata bytes the controller tracks; truncating drops the
+         * ECC a real chip's dump carries past byte 12. */
+        blk_pread(s->blk, nand_page_spare_offset(s, bank, page), s->geo.spare_stride,
+                  s->page_spare_buffer.bytes, 0);
 
         s->buffered_page = page;
         s->buffered_bank = bank;
@@ -133,7 +137,10 @@ static void s5l8702_nand_do_program(S5L8702NandState *s) {
 
     qemu_mutex_lock(&s->lock);
     blk_pwrite(s->blk, nand_page_data_offset(s, bank, page), s->geo.bytes_per_page, s->page_buffer, 0);
-    blk_pwrite(s->blk, nand_page_spare_offset(s, bank, page), 12, s->page_spare_buffer.bytes, 0);
+    /* Write the full spare record too, or the rest holds stale data from
+     * whatever occupied the page before (0xFF if erased, stale ECC if not). */
+    blk_pwrite(s->blk, nand_page_spare_offset(s, bank, page), s->geo.spare_stride,
+               s->page_spare_buffer.bytes, 0);
     qemu_mutex_unlock(&s->lock);
 
     s->buffered_bank = bank;
@@ -240,8 +247,11 @@ static uint64_t nand_mem_read(void *opaque, hwaddr addr, unsigned size) {
          * (page_is_blank(data) && page_is_blank(spare)). Checking spare alone
          * mis-reports data-only pages (whose first spare bytes happen to be 0xFF)
          * as erased, which diverges from the rehost during the firmware's
-         * VFL/FTL signature scan and makes the signature impossible to find. */
-        for (uint32_t i = 0; i < 12; i++) {
+         * VFL/FTL signature scan and makes the signature impossible to find.
+         *
+         * The scan covers the whole spare_stride record, not just the first
+         * 12 bytes, since a written page can carry ECC past byte 12. */
+        for (uint32_t i = 0; i < s->geo.spare_stride; i++) {
             if (s->page_spare_buffer.bytes[i] != 0xFF) {
                 trace_s5l8702_nand_reg_ecc_status(0);
                 return 0;
@@ -315,7 +325,10 @@ static void nand_mem_write(void *opaque, hwaddr addr, uint64_t val, unsigned siz
         break;
 
     case NAND_FMDNUM:
-        s->reading_spare = (val == NAND_BYTES_PER_SPARE - 1) ? 1 : 0;
+        /* FMDNUM carries (transfer length - 1); firmware sets it to the
+         * spare size for a spare-only transfer, so compare against
+         * spare_stride rather than a fixed constant. */
+        s->reading_spare = (val == s->geo.spare_stride - 1) ? 1 : 0;
         s->fmdnum = val;
         trace_s5l8702_nand_reg_fmdnum_write(s->fmdnum);
         break;
@@ -423,11 +436,10 @@ static void s5l8702_nand_init(Object *obj) {
     qemu_mutex_init(&s->lock);
 }
 
-/* Geometry used when no drive is attached (stub mode), matching the layout
- * historically compiled in. Never used to address a backing image. */
+/* Geometry for stub mode (no drive attached); never used to address an image. */
 static const S5L8702NandGeometry nand_stub_geometry = {
     .bytes_per_page      = 2048,
-    .spare_stride        = 16,
+    .spare_stride        = NAND_STUB_BYTES_PER_SPARE,
     .pages_per_block     = 128,
     .num_banks_installed = 2,
     .nand_id             = NAND_CHIP_ID,
@@ -538,8 +550,10 @@ static void s5l8702_nand_realize(DeviceState *dev, Error **errp) {
     }
 
     s->page_buffer = g_malloc(s->geo.bytes_per_page);
-    s->page_spare_buffer.bytes = g_malloc(NAND_BYTES_PER_SPARE);
-    memset(s->page_spare_buffer.bytes, 0xff, NAND_BYTES_PER_SPARE);
+    /* Sized from the image's spare_stride, not a fixed constant: some
+     * parts' stride (448) is far past the old fixed 64-byte allocation. */
+    s->page_spare_buffer.bytes = g_malloc(s->geo.spare_stride);
+    memset(s->page_spare_buffer.bytes, 0xff, s->geo.spare_stride);
 }
 
 static void s5l8702_nand_reset(DeviceState *dev) {

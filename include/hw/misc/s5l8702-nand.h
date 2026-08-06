@@ -10,7 +10,10 @@
 #include "hw/misc/s5l8702-nand-fmiss.h"
 
 #define NAND_NUM_BANKS          8
-#define NAND_BYTES_PER_SPARE    64
+
+/* Stub-mode fallback only; the real path uses geo.spare_stride from the
+ * image's geometry header instead of this constant. */
+#define NAND_STUB_BYTES_PER_SPARE 64
 
 /* The FMI moves page data in fixed 2 KiB DMA/ECC sectors regardless of the
  * page size: the firmware supplies one destination (or source) address per
