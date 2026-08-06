@@ -8,6 +8,7 @@
 #include "qemu/osdep.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
+#include "qemu/cutils.h"
 #include "hw/misc/s5l8702-nand.h"
 #include "hw/misc/s5l8702-nand-fmiss.h"
 #include "hw/misc/s5l8702-nand-fmiss-pv.h"
@@ -103,6 +104,26 @@ static void fmi_splice_data(S5L8702NandState *s, uint8_t *raw, const uint8_t *da
     }
 }
 
+/* True if a program/erase at this bank+block should be failed. */
+static bool nand_fault_hits(S5L8702NandState *s, uint32_t bank, uint32_t block,
+                            bool is_erase) {
+    if (s->fault_block_count == 0) {
+        return false;
+    }
+    if (!(is_erase ? s->fault_on_erase : s->fault_on_program)) {
+        return false;
+    }
+    if (s->fault_bank >= 0 && (uint32_t)s->fault_bank != bank) {
+        return false;
+    }
+    for (uint32_t i = 0; i < s->fault_block_count; i++) {
+        if (s->fault_block_list[i] == block) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void s5l8702_nand_set_buffered_page(S5L8702NandState *s, uint32_t page) {
     int bank = get_bank(s);
     if (bank == -1) {
@@ -154,6 +175,20 @@ static void s5l8702_nand_do_erase(S5L8702NandState *s) {
     uint32_t block = s->fmaddr0;
     uint32_t page0 = block * s->geo.pages_per_block;
 
+    /* Fault lookup uses row_address / pages_per_block for BOTH ops so that
+     * "fault-blocks" means the same thing for erase and program. Note that
+     * the erase command's FMADDR0 is a row address (the block's first
+     * page), not a block index, unlike `block` above. */
+    if (nand_fault_hits(s, bank, s->fmaddr0 / s->geo.pages_per_block, true)) {
+        /* Refuse the erase and latch FAIL, as a worn block does; leave contents alone. */
+        s->op_failed = true;
+        s->fault_hits++;
+        trace_s5l8702_nand_fault_injected("erase", bank,
+                                          s->fmaddr0 / s->geo.pages_per_block);
+        return;
+    }
+    s->op_failed = false;
+
     g_autofree uint8_t *erased_record = g_malloc(s->geo.page_record_size);
     memset(erased_record, 0xff, s->geo.page_record_size);
 
@@ -177,6 +212,17 @@ static void s5l8702_nand_do_program(S5L8702NandState *s) {
     }
 
     uint32_t page = s5l8702_nand_current_page(s);
+
+    if (nand_fault_hits(s, bank, page / s->geo.pages_per_block, false)) {
+        /* Refuse the program and latch FAIL, leaving the page's contents untouched. */
+        s->op_failed = true;
+        s->fault_hits++;
+        s->destaddr_queue_count = 0;
+        trace_s5l8702_nand_fault_injected("program", bank,
+                                          page / s->geo.pages_per_block);
+        return;
+    }
+    s->op_failed = false;
 
     const uint32_t sector = NAND_SECTOR_SIZE;
     uint32_t n = s->destaddr_queue_count;
@@ -242,7 +288,8 @@ static uint64_t nand_mem_read(void *opaque, hwaddr addr, unsigned size) {
     case NAND_FMFIFO:
         trace_s5l8702_nand_reg_fifo_read(s->cmd);
         if (s->cmd == NAND_CMD_READSTATUS) {
-            return (1 << 6);
+            /* Bit 6 = ready, bit 0 = FAIL (set only when fault injection triggers). */
+            return (1 << 6) | (s->op_failed ? 1 : 0);
         } else {
             uint32_t page = (s->fmaddr1 << 16) | (s->fmaddr0 >> 16);
             trace_s5l8702_nand_read_page(get_bank(s), page, s->destaddr);
@@ -649,9 +696,59 @@ static bool s5l8702_nand_load_geometry(S5L8702NandState *s, Error **errp) {
     return true;
 }
 
+/* Parse the "fault-blocks"/"fault-ops" properties into the lookup used by
+ * nand_fault_hits(). Empty/absent fault-blocks leaves fault injection off. */
+static bool s5l8702_nand_parse_faults(S5L8702NandState *s, Error **errp) {
+    const char *ops = s->fault_ops ? s->fault_ops : "both";
+    if (!strcmp(ops, "both")) {
+        s->fault_on_program = s->fault_on_erase = true;
+    } else if (!strcmp(ops, "program")) {
+        s->fault_on_program = true;
+    } else if (!strcmp(ops, "erase")) {
+        s->fault_on_erase = true;
+    } else {
+        error_setg(errp, "fault-ops must be one of: program, erase, both "
+                   "(got '%s')", ops);
+        return false;
+    }
+
+    if (!s->fault_blocks || !s->fault_blocks[0]) {
+        return true;
+    }
+
+    g_auto(GStrv) parts = g_strsplit(s->fault_blocks, ",", -1);
+    guint n = g_strv_length(parts);
+    s->fault_block_list = g_new0(uint32_t, n);
+    for (guint i = 0; i < n; i++) {
+        const char *tok = g_strstrip(parts[i]);
+        if (!tok[0]) {
+            continue;
+        }
+        uint64_t v;
+        if (qemu_strtou64(tok, NULL, 0, &v) < 0) {
+            error_setg(errp, "fault-blocks: '%s' is not a number", tok);
+            return false;
+        }
+        s->fault_block_list[s->fault_block_count++] = (uint32_t)v;
+    }
+
+    if (s->fault_block_count) {
+        g_autofree char *pretty = g_strjoinv(",", parts);
+        g_autofree char *bank = s->fault_bank < 0
+            ? g_strdup("all") : g_strdup_printf("%d", s->fault_bank);
+        info_report("s5l8702-nand: fault injection armed: %u block(s) [%s], "
+                    "ops=%s, bank=%s", s->fault_block_count, pretty, ops, bank);
+    }
+    return true;
+}
+
 static void s5l8702_nand_realize(DeviceState *dev, Error **errp) {
     S5L8702NandState *s = S5L8702_NAND(dev);
     trace_s5l8702_nand_realize(s->blk ? blk_name(s->blk) : "(none)");
+
+    if (!s5l8702_nand_parse_faults(s, errp)) {
+        return;
+    }
 
     if (!s->blk) {
         if (s->raw_ecc_layout) {
@@ -724,6 +821,11 @@ static Property s5l8702_nand_properties[] = {
     /* Off by default: existing images are logical-layout; enable for a raw
      * dump taken straight off a chip. */
     DEFINE_PROP_BOOL("raw-ecc-layout", S5L8702NandState, raw_ecc_layout, false),
+    /* Fault injection: see the comment on fault_blocks in the header. Off
+     * unless fault-blocks names at least one block. */
+    DEFINE_PROP_STRING("fault-blocks", S5L8702NandState, fault_blocks),
+    DEFINE_PROP_STRING("fault-ops", S5L8702NandState, fault_ops),
+    DEFINE_PROP_INT32("fault-bank", S5L8702NandState, fault_bank, -1),
     DEFINE_PROP_END_OF_LIST(),
 };
 

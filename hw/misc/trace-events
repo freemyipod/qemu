@@ -365,6 +365,7 @@ s5l8702_nand_reg_fmdnum_write(uint32_t val) "FMDNUM <- 0x%08x"
 s5l8702_nand_reg_destaddr_write(uint32_t val) "DESTADDR <- 0x%08x"
 s5l8702_nand_bank_select(uint32_t fmctrl0, int bank) "fmctrl0=0x%08x bank=%d"
 s5l8702_nand_warn_no_bank(uint32_t page, int multiple) "page=%u reading_multiple_pages=%d"
+s5l8702_nand_fault_injected(const char *op, uint32_t bank, uint32_t block) "INJECTED FAULT: %s failed on bank=%u block=%u"
 # s5l8702-nand.c - FMISS VM instruction detail
 s5l8702_fmiss_insn(uint32_t offset, uint32_t opcode, uint32_t dst, uint32_t src, uint32_t imm) "offset=0x%08x op=0x%02x dst=0x%02x src=0x%04x imm=0x%08x"
 s5l8702_fmiss_terminate(void) "terminate"

@@ -150,6 +150,21 @@ struct S5L8702NandState {
     uint8_t *raw_scratch;  /* physical record staging for the write paths */
     bool     raw_blank;    /* buffered physical record is entirely 0xFF */
 
+    /* Fault injection: lets program/erase fail like a worn real chip would,
+     * so firmware error paths are reachable under emulation. "fault-blocks"
+     * is a comma-separated block list, "fault-ops" selects program/erase/
+     * both, "fault-bank" restricts to one bank (-1 = all). A faulted op is
+     * skipped and latches the FAIL bit for the next READSTATUS. */
+    char     *fault_blocks;      /* property string, parsed at realize */
+    char     *fault_ops;         /* "program" | "erase" | "both" */
+    int32_t   fault_bank;        /* -1 = every bank */
+    uint32_t *fault_block_list;
+    uint32_t  fault_block_count;
+    bool      fault_on_program;
+    bool      fault_on_erase;
+    bool      op_failed;         /* latched FAIL bit for the next READSTATUS */
+    uint64_t  fault_hits;
+
     uint32_t buffered_bank;
     uint32_t buffered_page;
     bool     reading_multiple_pages;
