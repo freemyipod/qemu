@@ -49,6 +49,60 @@ static uint64_t nand_page_spare_offset(S5L8702NandState *s, uint32_t bank, uint3
     return nand_page_data_offset(s, bank, page) + s->geo.bytes_per_page;
 }
 
+/* Raw-ECC pages have no data/spare split (chunks straddle the page boundary),
+ * so the whole record moves as one unit; kept separate from the data offset. */
+static uint64_t nand_page_record_offset(S5L8702NandState *s, uint32_t bank, uint32_t page) {
+    return nand_page_data_offset(s, bank, page);
+}
+
+static bool buffer_is_all_ff(const uint8_t *buf, uint64_t len) {
+    for (uint64_t i = 0; i < len; i++) {
+        if (buf[i] != 0xFF) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Physical record -> what firmware sees. Metadata is striped 3 bytes/chunk
+ * across the first four chunks; parity is discarded (no BCH engine here). */
+static void fmi_deinterleave(S5L8702NandState *s, const uint8_t *raw,
+                             uint8_t *data, uint8_t *meta) {
+    memset(meta, 0xff, s->geo.spare_stride);
+    for (uint32_t c = 0; c < s->geo.ecc_chunks_per_page; c++) {
+        const uint8_t *chunk = raw + (uint64_t)c * NAND_ECC_CHUNK_SIZE;
+        memcpy(data + (uint64_t)c * NAND_ECC_CHUNK_DATA,
+               chunk + NAND_ECC_CHUNK_OVERHEAD, NAND_ECC_CHUNK_DATA);
+        if (c * NAND_ECC_CHUNK_META < NAND_META_BYTES) {
+            memcpy(meta + c * NAND_ECC_CHUNK_META, chunk, NAND_ECC_CHUNK_META);
+        }
+    }
+}
+
+/* What firmware wrote -> physical record. Parity is left erased (no BCH
+ * engine); a raw-layout image from this model isn't valid to flash to a chip. */
+static void fmi_interleave(S5L8702NandState *s, uint8_t *raw,
+                           const uint8_t *data, const uint8_t *meta) {
+    memset(raw, 0xff, s->geo.page_record_size);
+    for (uint32_t c = 0; c < s->geo.ecc_chunks_per_page; c++) {
+        uint8_t *chunk = raw + (uint64_t)c * NAND_ECC_CHUNK_SIZE;
+        memcpy(chunk + NAND_ECC_CHUNK_OVERHEAD,
+               data + (uint64_t)c * NAND_ECC_CHUNK_DATA, NAND_ECC_CHUNK_DATA);
+        if (c * NAND_ECC_CHUNK_META < NAND_META_BYTES) {
+            memcpy(chunk, meta + c * NAND_ECC_CHUNK_META, NAND_ECC_CHUNK_META);
+        }
+    }
+}
+
+/* Replace only the data halves, preserving metadata/parity. Used by the FIFO
+ * write path, which (unlike program) has no spare write of its own. */
+static void fmi_splice_data(S5L8702NandState *s, uint8_t *raw, const uint8_t *data) {
+    for (uint32_t c = 0; c < s->geo.ecc_chunks_per_page; c++) {
+        memcpy(raw + (uint64_t)c * NAND_ECC_CHUNK_SIZE + NAND_ECC_CHUNK_OVERHEAD,
+               data + (uint64_t)c * NAND_ECC_CHUNK_DATA, NAND_ECC_CHUNK_DATA);
+    }
+}
+
 void s5l8702_nand_set_buffered_page(S5L8702NandState *s, uint32_t page) {
     int bank = get_bank(s);
     if (bank == -1) {
@@ -60,12 +114,22 @@ void s5l8702_nand_set_buffered_page(S5L8702NandState *s, uint32_t page) {
     }
 
     if ((uint32_t)bank != s->buffered_bank || page != s->buffered_page) {
-        blk_pread(s->blk, nand_page_data_offset(s, bank, page), s->geo.bytes_per_page, s->page_buffer, 0);
-        /* Read the full spare record (image's spare_stride), not just the
-         * 12 metadata bytes the controller tracks; truncating drops the
-         * ECC a real chip's dump carries past byte 12. */
-        blk_pread(s->blk, nand_page_spare_offset(s, bank, page), s->geo.spare_stride,
-                  s->page_spare_buffer.bytes, 0);
+        if (s->raw_ecc_layout) {
+            /* Physical record: pull it whole and let the controller model do
+             * what the FMI's BCH engine does in hardware. */
+            blk_pread(s->blk, nand_page_record_offset(s, bank, page),
+                      s->geo.page_record_size, s->raw_buffer, 0);
+            s->raw_blank = buffer_is_all_ff(s->raw_buffer, s->geo.page_record_size);
+            fmi_deinterleave(s, s->raw_buffer, s->page_buffer,
+                             s->page_spare_buffer.bytes);
+        } else {
+            blk_pread(s->blk, nand_page_data_offset(s, bank, page), s->geo.bytes_per_page, s->page_buffer, 0);
+            /* Read the full spare record (image's spare_stride), not just the
+             * 12 metadata bytes the controller tracks; truncating drops the
+             * ECC a real chip's dump carries past byte 12. */
+            blk_pread(s->blk, nand_page_spare_offset(s, bank, page), s->geo.spare_stride,
+                      s->page_spare_buffer.bytes, 0);
+        }
 
         s->buffered_page = page;
         s->buffered_bank = bank;
@@ -136,11 +200,21 @@ static void s5l8702_nand_do_program(S5L8702NandState *s) {
     s->destaddr_queue_count = 0;
 
     qemu_mutex_lock(&s->lock);
-    blk_pwrite(s->blk, nand_page_data_offset(s, bank, page), s->geo.bytes_per_page, s->page_buffer, 0);
-    /* Write the full spare record too, or the rest holds stale data from
-     * whatever occupied the page before (0xFF if erased, stale ECC if not). */
-    blk_pwrite(s->blk, nand_page_spare_offset(s, bank, page), s->geo.spare_stride,
-               s->page_spare_buffer.bytes, 0);
+    if (s->raw_ecc_layout) {
+        /* Re-interleave data + metadata into a fresh record. Rebuilding the
+         * whole record (rather than splicing) is the raw-layout equivalent of
+         * the full spare write below: it drops the previous occupant's stale
+         * parity instead of leaving it attached to new data. */
+        fmi_interleave(s, s->raw_scratch, s->page_buffer, s->page_spare_buffer.bytes);
+        blk_pwrite(s->blk, nand_page_record_offset(s, bank, page),
+                   s->geo.page_record_size, s->raw_scratch, 0);
+    } else {
+        blk_pwrite(s->blk, nand_page_data_offset(s, bank, page), s->geo.bytes_per_page, s->page_buffer, 0);
+        /* Write the full spare record too, or the rest holds stale data from
+         * whatever occupied the page before (0xFF if erased, stale ECC if not). */
+        blk_pwrite(s->blk, nand_page_spare_offset(s, bank, page), s->geo.spare_stride,
+                   s->page_spare_buffer.bytes, 0);
+    }
     qemu_mutex_unlock(&s->lock);
 
     s->buffered_bank = bank;
@@ -251,6 +325,13 @@ static uint64_t nand_mem_read(void *opaque, hwaddr addr, unsigned size) {
          *
          * The scan covers the whole spare_stride record, not just the first
          * 12 bytes, since a written page can carry ECC past byte 12. */
+        if (s->raw_ecc_layout) {
+            /* An erased page is 0xFF across data, metadata and parity alike,
+             * so the physical record (which includes parity) answers this
+             * directly. */
+            trace_s5l8702_nand_reg_ecc_status(s->raw_blank ? 1 : 0);
+            return s->raw_blank ? 0x20000000 : 0;
+        }
         for (uint32_t i = 0; i < s->geo.spare_stride; i++) {
             if (s->page_spare_buffer.bytes[i] != 0xFF) {
                 trace_s5l8702_nand_reg_ecc_status(0);
@@ -346,7 +427,18 @@ static void nand_mem_write(void *opaque, hwaddr addr, uint64_t val, unsigned siz
             qemu_mutex_lock(&s->lock);
             if (s->blk && s->buffered_bank < s->geo.num_banks_installed) {
                 printf("[NAND] Writing page: bank=%d, page=0x%x\n", s->buffered_bank, s->buffered_page);
-                blk_pwrite(s->blk, nand_page_data_offset(s, s->buffered_bank, s->buffered_page), s->geo.bytes_per_page, s->page_buffer, 0);
+                if (s->raw_ecc_layout) {
+                    /* Data-only write: read-modify-write the record and splice
+                     * in the new data, leaving metadata/parity untouched.
+                     * (words[0] is clobbered by every FIFO write, so it can't
+                     * be reused as metadata here.) */
+                    uint64_t off = nand_page_record_offset(s, s->buffered_bank, s->buffered_page);
+                    blk_pread(s->blk, off, s->geo.page_record_size, s->raw_scratch, 0);
+                    fmi_splice_data(s, s->raw_scratch, s->page_buffer);
+                    blk_pwrite(s->blk, off, s->geo.page_record_size, s->raw_scratch, 0);
+                } else {
+                    blk_pwrite(s->blk, nand_page_data_offset(s, s->buffered_bank, s->buffered_page), s->geo.bytes_per_page, s->page_buffer, 0);
+                }
             }
             qemu_mutex_unlock(&s->lock);
         }
@@ -513,6 +605,32 @@ static bool s5l8702_nand_load_geometry(S5L8702NandState *s, Error **errp) {
     g->page_record_size = (uint64_t)g->bytes_per_page + g->spare_stride;
     g->bank_stride      = g->pages_per_bank * g->page_record_size;
 
+    if (s->raw_ecc_layout) {
+        if (g->bytes_per_page % NAND_ECC_CHUNK_DATA != 0) {
+            error_setg(errp, "raw-ecc-layout: page size %u is not a multiple of "
+                       "the %u-byte BCH chunk", g->bytes_per_page,
+                       (uint32_t)NAND_ECC_CHUNK_DATA);
+            return false;
+        }
+        g->ecc_chunks_per_page = g->bytes_per_page / NAND_ECC_CHUNK_DATA;
+        uint64_t needed = (uint64_t)g->ecc_chunks_per_page * NAND_ECC_CHUNK_SIZE;
+        if (g->page_record_size < needed) {
+            error_setg(errp, "raw-ecc-layout: %u-byte page record cannot hold "
+                       "%u BCH chunks of %u bytes (%" PRIu64 " needed); the "
+                       "image's spare_stride is too small for a physical dump",
+                       (uint32_t)g->page_record_size, g->ecc_chunks_per_page,
+                       (uint32_t)NAND_ECC_CHUNK_SIZE, needed);
+            return false;
+        }
+        /* 12 metadata bytes striped 3 per chunk need the first four chunks. */
+        if (g->ecc_chunks_per_page * NAND_ECC_CHUNK_META < NAND_META_BYTES) {
+            error_setg(errp, "raw-ecc-layout: %u chunks per page cannot carry "
+                       "%u metadata bytes", g->ecc_chunks_per_page,
+                       (uint32_t)NAND_META_BYTES);
+            return false;
+        }
+    }
+
     int64_t len = blk_getlength(s->blk);
     if (len < 0) {
         error_setg_errno(errp, -len, "failed to get NAND image length");
@@ -536,6 +654,11 @@ static void s5l8702_nand_realize(DeviceState *dev, Error **errp) {
     trace_s5l8702_nand_realize(s->blk ? blk_name(s->blk) : "(none)");
 
     if (!s->blk) {
+        if (s->raw_ecc_layout) {
+            error_setg(errp, "raw-ecc-layout requires a drive; there is no "
+                       "image to de-interleave in stub mode");
+            return;
+        }
         /* No drive attached: operate without backing storage (stub mode) */
         s->geo = nand_stub_geometry;
         s->geo.sectors_per_page = s->geo.bytes_per_page / NAND_SECTOR_SIZE;
@@ -550,10 +673,25 @@ static void s5l8702_nand_realize(DeviceState *dev, Error **errp) {
     }
 
     s->page_buffer = g_malloc(s->geo.bytes_per_page);
+    /* Start erased, not uninitialised: the 0xC30 blank check scans this
+     * buffer before any page is read. */
+    memset(s->page_buffer, 0xff, s->geo.bytes_per_page);
     /* Sized from the image's spare_stride, not a fixed constant: some
      * parts' stride (448) is far past the old fixed 64-byte allocation. */
     s->page_spare_buffer.bytes = g_malloc(s->geo.spare_stride);
     memset(s->page_spare_buffer.bytes, 0xff, s->geo.spare_stride);
+
+    if (s->raw_ecc_layout) {
+        s->raw_buffer  = g_malloc(s->geo.page_record_size);
+        s->raw_scratch = g_malloc(s->geo.page_record_size);
+        memset(s->raw_buffer, 0xff, s->geo.page_record_size);
+        memset(s->raw_scratch, 0xff, s->geo.page_record_size);
+        info_report("s5l8702-nand: raw ECC layout enabled: %u chunks/page "
+                    "(%u data + %u overhead), %u-byte record",
+                    s->geo.ecc_chunks_per_page, (uint32_t)NAND_ECC_CHUNK_DATA,
+                    (uint32_t)NAND_ECC_CHUNK_OVERHEAD,
+                    (uint32_t)s->geo.page_record_size);
+    }
 }
 
 static void s5l8702_nand_reset(DeviceState *dev) {
@@ -572,6 +710,7 @@ static void s5l8702_nand_reset(DeviceState *dev) {
     s->fmi_int       = 0;
     s->reading_spare = 0;
     s->buffered_page = -1;
+    s->raw_blank     = false;
     s->destaddr_queue_count = 0;
 
     fmiss_vm_reset(&s->fmiss_vm, 0);
@@ -582,6 +721,9 @@ static void s5l8702_nand_reset(DeviceState *dev) {
 static Property s5l8702_nand_properties[] = {
     DEFINE_PROP_DRIVE("drive", S5L8702NandState, blk),
     DEFINE_PROP_BOOL("fmiss-enable", S5L8702NandState, fmiss_enable, false),
+    /* Off by default: existing images are logical-layout; enable for a raw
+     * dump taken straight off a chip. */
+    DEFINE_PROP_BOOL("raw-ecc-layout", S5L8702NandState, raw_ecc_layout, false),
     DEFINE_PROP_END_OF_LIST(),
 };
 

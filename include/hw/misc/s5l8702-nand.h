@@ -21,6 +21,20 @@
 #define NAND_SECTOR_SIZE        0x800
 #define NAND_DESTADDR_QUEUE_LEN 16
 
+/* Physical (on-media) ECC layout: see the "raw-ecc-layout" property.
+ * A raw dump is not [data][spare]; the FMI's BCH engine stores each page as
+ * 528-byte chunks of [3B metadata][13B parity][512B data], with the 12
+ * firmware-visible metadata bytes striped across the first four chunks.
+ * This model has no BCH engine, so it lays out images logically instead;
+ * the transform between the two representations happens here. */
+#define NAND_ECC_CHUNK_DATA     512
+#define NAND_ECC_CHUNK_META     3
+#define NAND_ECC_CHUNK_PARITY   13
+#define NAND_ECC_CHUNK_OVERHEAD (NAND_ECC_CHUNK_META + NAND_ECC_CHUNK_PARITY)
+#define NAND_ECC_CHUNK_SIZE     (NAND_ECC_CHUNK_OVERHEAD + NAND_ECC_CHUNK_DATA)
+/* Metadata bytes the controller hands the firmware (page_spare_buffer words). */
+#define NAND_META_BYTES         12
+
 #define NAND_CHIP_ID            0xA5D5D589
 
 /* Unified backing-image geometry: banks and their spare bytes live
@@ -55,6 +69,7 @@ typedef struct S5L8702NandGeometry {
     uint64_t page_record_size;  /* bytes_per_page + spare_stride */
     uint64_t bank_stride;       /* pages_per_bank * page_record_size */
     uint32_t nand_id;           /* chip ID reported by NAND_CMD_ID */
+    uint32_t ecc_chunks_per_page; /* raw layout only: bytes_per_page / 512 */
 } S5L8702NandGeometry;
 
 /* NAND register offsets within the 0x38A00000 MMIO region */
@@ -126,6 +141,14 @@ struct S5L8702NandState {
         uint8_t  *bytes;
         uint32_t *words;
     } page_spare_buffer;
+
+    /* "raw-ecc-layout": the image stores physical on-media pages (BCH chunks)
+     * instead of logical [data][spare] records. Read/write de-interleave and
+     * re-interleave transparently when set. */
+    bool     raw_ecc_layout;
+    uint8_t *raw_buffer;   /* physical record backing the buffered page */
+    uint8_t *raw_scratch;  /* physical record staging for the write paths */
+    bool     raw_blank;    /* buffered physical record is entirely 0xFF */
 
     uint32_t buffered_bank;
     uint32_t buffered_page;
