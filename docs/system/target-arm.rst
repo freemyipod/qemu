@@ -96,6 +96,7 @@ undocumented; you can get a complete list by running
    arm/nseries
    arm/nuvoton
    arm/imx25-pdk
+   arm/ipod-nano3g
    arm/orangepi
    arm/palm
    arm/raspi
