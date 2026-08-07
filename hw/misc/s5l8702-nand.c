@@ -56,6 +56,14 @@ static uint64_t nand_page_record_offset(S5L8702NandState *s, uint32_t bank, uint
     return nand_page_data_offset(s, bank, page);
 }
 
+/* Pages cleared by one ERASE command: the PHYSICAL block size, which can
+ * differ from the header's pages_per_block (e.g. a firmware-level
+ * superblock spanning multiple physical blocks). erase-pages overrides
+ * the header for such images; 0 (default) keeps the header value. */
+static uint32_t nand_erase_pages(S5L8702NandState *s) {
+    return s->erase_pages ? s->erase_pages : s->geo.pages_per_block;
+}
+
 static bool buffer_is_all_ff(const uint8_t *buf, uint64_t len) {
     for (uint64_t i = 0; i < len; i++) {
         if (buf[i] != 0xFF) {
@@ -172,13 +180,13 @@ static void s5l8702_nand_do_erase(S5L8702NandState *s) {
         return;
     }
 
-    uint32_t block = s->fmaddr0;
-    uint32_t page0 = block * s->geo.pages_per_block;
+    /* FMADDR0 for an erase is a ROW address (block's first page), not a block
+     * index; align down so a row into the middle of a block still erases it. */
+    uint32_t erase_pages = nand_erase_pages(s);
+    uint32_t page0 = s->fmaddr0 - (s->fmaddr0 % erase_pages);
 
-    /* Fault lookup uses row_address / pages_per_block for BOTH ops so that
-     * "fault-blocks" means the same thing for erase and program. Note that
-     * the erase command's FMADDR0 is a row address (the block's first
-     * page), not a block index, unlike `block` above. */
+    /* Fault lookup stays keyed on pages_per_block for both ops, so
+     * "fault-blocks" always names the firmware's block unit. */
     if (nand_fault_hits(s, bank, s->fmaddr0 / s->geo.pages_per_block, true)) {
         /* Refuse the erase and latch FAIL, as a worn block does; leave contents alone. */
         s->op_failed = true;
@@ -189,17 +197,19 @@ static void s5l8702_nand_do_erase(S5L8702NandState *s) {
     }
     s->op_failed = false;
 
+    trace_s5l8702_nand_erase(bank, s->fmaddr0, page0, erase_pages);
+
     g_autofree uint8_t *erased_record = g_malloc(s->geo.page_record_size);
     memset(erased_record, 0xff, s->geo.page_record_size);
 
     qemu_mutex_lock(&s->lock);
-    for (uint32_t i = 0; i < s->geo.pages_per_block; i++) {
+    for (uint32_t i = 0; i < erase_pages; i++) {
         blk_pwrite(s->blk, nand_page_data_offset(s, bank, page0 + i), s->geo.page_record_size, erased_record, 0);
     }
     qemu_mutex_unlock(&s->lock);
 
     if (s->buffered_bank == (uint32_t)bank &&
-        s->buffered_page >= page0 && s->buffered_page < page0 + s->geo.pages_per_block) {
+        s->buffered_page >= page0 && s->buffered_page < page0 + erase_pages) {
         s->buffered_page = -1;
     }
 }
@@ -826,6 +836,9 @@ static Property s5l8702_nand_properties[] = {
     DEFINE_PROP_STRING("fault-blocks", S5L8702NandState, fault_blocks),
     DEFINE_PROP_STRING("fault-ops", S5L8702NandState, fault_ops),
     DEFINE_PROP_INT32("fault-bank", S5L8702NandState, fault_bank, -1),
+    /* Pages cleared by one ERASE command; 0 = use the image header's
+     * pages_per_block. See nand_erase_pages(). */
+    DEFINE_PROP_UINT32("erase-pages", S5L8702NandState, erase_pages, 0),
     DEFINE_PROP_END_OF_LIST(),
 };
 

@@ -146,6 +146,10 @@ struct S5L8702NandState {
      * instead of logical [data][spare] records. Read/write de-interleave and
      * re-interleave transparently when set. */
     bool     raw_ecc_layout;
+    /* Pages cleared by one ERASE command. 0 = take the image header's
+     * pages_per_block; set it when that field describes the firmware's block
+     * (e.g. a 256-page superblock) rather than the chip's. */
+    uint32_t erase_pages;
     uint8_t *raw_buffer;   /* physical record backing the buffered page */
     uint8_t *raw_scratch;  /* physical record staging for the write paths */
     bool     raw_blank;    /* buffered physical record is entirely 0xFF */
