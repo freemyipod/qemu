@@ -16,6 +16,7 @@
 #include "hw/misc/s5l8702-lcd.h"
 #include "hw/misc/s5l8702-jpeg.h"
 #include "hw/misc/s5l8702-chipid.h"
+#include "hw/misc/s5l8702-prng.h"
 #include "hw/misc/s5l8702-miu.h"
 #include "hw/misc/s5l8702-clickwheel.h"
 #include "hw/misc/s5l8702-nand.h"
@@ -95,6 +96,7 @@ struct S5L8702State {
     S5L8702AtaState ata;
     S5L8702ClickwheelState clickwheel;
     S5L8702ChipIDState chipid;
+    S5L8702PrngState prng;
     S5L8702NandState nand;
     S5L8702NandEccState nand_ecc;
     S5L8702MiuState miu;

@@ -75,6 +75,7 @@ static void s5l8702_init(Object *obj) {
     object_initialize_child(obj, "ata", &s->ata, TYPE_S5L8702_ATA);
     object_initialize_child(obj, "clickwheel", &s->clickwheel, TYPE_S5L8702_CLICKWHEEL);
     object_initialize_child(obj, "chipid", &s->chipid, TYPE_S5L8702_CHIPID);
+    object_initialize_child(obj, "prng", &s->prng, TYPE_S5L8702_PRNG);
     object_initialize_child(obj, "nand", &s->nand, TYPE_S5L8702_NAND);
     object_initialize_child(obj, "nand_ecc", &s->nand_ecc, TYPE_S5L8702_NAND_ECC);
     object_initialize_child(obj, "miu", &s->miu, TYPE_S5L8702_MIU);
@@ -196,6 +197,10 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
     /* ChipID */
     sysbus_realize(SYS_BUS_DEVICE(&s->chipid), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->chipid), 0, S5L8702_CHIPID_BASE);
+
+    /* PRNG */
+    sysbus_realize(SYS_BUS_DEVICE(&s->prng), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->prng), 0, S5L8702_PRNG_BASE);
 
     /* NAND Flash Controller */
     sysbus_realize(SYS_BUS_DEVICE(&s->nand), &error_fatal);
