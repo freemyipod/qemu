@@ -309,6 +309,7 @@ s5l8702_sysic_init(void) "init"
 # s5l8702-clk.c
 s5l8702_clk_reset(void) "reset"
 s5l8702_clk_init(void) "init"
+s5l8702_clk_sw_reset(uint32_t magic) "guest requested system reset (magic 0x%03x)"
 
 # s5l8702-jpeg.c
 s5l8702_jpeg_reset(void) "reset"

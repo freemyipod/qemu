@@ -3,6 +3,7 @@
 #include "hw/sysbus.h"
 #include "qemu/log.h"
 #include "qemu/module.h"
+#include "sysemu/runstate.h"
 #include "hw/misc/s5l8702-clk.h"
 #include "trace.h"
 
@@ -37,6 +38,9 @@ enum {
     REG_PWRCON3 = 0x0068,
     REG_PWRCON4 = 0x006C,
 };
+
+// magic value written to REG_SWRCON to reset the SoC
+#define SWRCON_RESET_MAGIC 0xaa5
 
 #define REG_INDEX(offset) (offset / sizeof(uint32_t))
 
@@ -89,8 +93,17 @@ static void s5l8702_clk_write(void *opaque, hwaddr offset, uint64_t val, unsigne
     const uint32_t idx = REG_INDEX(offset);
 
     switch (offset) {
+    case REG_SWRCON:
+        if (val == SWRCON_RESET_MAGIC) {
+            trace_s5l8702_clk_sw_reset((uint32_t) val);
+            s->regs[idx] = (uint32_t) val;
+            qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+            return;
+        }
+        break;
     default:
         // qemu_log_mask(LOG_UNIMP, "%s: unimplemented write (offset 0x%04x, value 0x%08x)\n", __func__, (uint32_t) offset, (uint32_t) val);
+        break;
     }
 
     s->regs[idx] = (uint32_t) val;

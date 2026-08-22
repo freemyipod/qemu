@@ -9,6 +9,7 @@
 #include "qom/object.h"
 #include "hw/arm/ipod-nano3g.h"
 #include "hw/qdev-properties.h"
+#include "sysemu/reset.h"
 #include "trace.h"
 
 static char *ipod_nano3g_get_bootrom_path(Object *obj, Error **errp)
@@ -180,11 +181,21 @@ static void ipod_nano3g_machine_init(MachineState *machine)
     qemu_add_kbd_event_handler(ipod_nano3g_key_event, &s->soc);
 }
 
+// Explicitly cold-reset the CPU ourselves so a guest-requested system reset
+// (REG_SWRCON <- 0xaa5, see s5l8702-clk.c) actually restarts execution.
+static void ipod_nano3g_machine_reset(MachineState *machine, ShutdownCause reason) {
+    IpodNano3gState *s = IPOD_NANO3G_MACHINE(machine);
+
+    qemu_devices_reset(reason);
+    cpu_reset(CPU(&s->soc.cpu));
+}
+
 static void ipod_nano3g_class_init(ObjectClass *oc, void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
 
     mc->init = ipod_nano3g_machine_init;
+    mc->reset = ipod_nano3g_machine_reset;
     mc->default_cpu_type = ARM_CPU_TYPE_NAME("arm926");
     mc->default_ram_size = 32 * MiB;
     mc->default_cpus = 1;
