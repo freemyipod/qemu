@@ -53,6 +53,27 @@ struct S5L8702TimerCtrlState {
 
     /*< public >*/
     MemoryRegion iomem;
+    /*
+     * "interval-reload": restart an interval-mode counter from 0 at its TDATA0
+     * compare, which is what the hardware does. Default false, because with it
+     * on the machine dies within a second of boot, and the reason is a second
+     * defect in this model rather than in the reload itself.
+     *
+     * What happens: the reload delivers the 100 Hz tick the firmware programs
+     * on the 32-bit timer at 0xC0, and the firmware's handler answers it by
+     * writing the free-running microsecond counter to TSTAT (0x118) once per
+     * tick -- not a status mask. This model treats the 32-bit timer IRQ as a
+     * level held until the matching TSTAT bit is cleared, so those writes only
+     * happen to clear timer F's bit (1 << 16) while the microsecond counter is
+     * in [0x10000, 0x20000), i.e. for the first ~131 ms. After that the line
+     * stays asserted, the handler re-enters every ~4 us, and the boot ends in
+     * the bootrom's halt loop at 0x20001348.
+     *
+     * So the 32-bit timers' acknowledge path is modelled wrongly, and that has
+     * to be settled before this can be turned on by default.
+     */
+    bool interval_reload;
+
     Clock *pclk;
     Clock *eclk;
     Clock *extclk0;

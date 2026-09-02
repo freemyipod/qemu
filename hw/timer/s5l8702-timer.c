@@ -5,6 +5,7 @@
 #include "hw/irq.h"
 #include "hw/clock.h"
 #include "qemu/module.h"
+#include "hw/qdev-properties.h"
 #include "hw/timer/s5l8702-timer.h"
 #include "trace.h"
 
@@ -58,6 +59,23 @@
 #define S5L8702_TIMER_TSTAT         0x118
 
 static void s5l8702_timer_schedule(S5L8702Timer *t);
+
+/*
+ * TSTAT packs the four 32-bit timers' status into one word, and it does NOT
+ * follow register order: the timers sit at 0xA0/0xC0/0xE0/0x100 (indices 4-7,
+ * "E".."H") but their status fields run INTE=24, INTF=16, INTG=8, INTH=0, i.e.
+ * highest register offset gets the lowest field. Each field is 3 bits:
+ * INT0 = 1<<shift, INT1 = 2<<shift, OVF = 4<<shift.
+ */
+static uint32_t s5l8702_timer_tstat_shift(uint32_t idx)
+{
+    switch (idx) {
+    case 4:  return 24;  /* INTE */
+    case 5:  return 16;  /* INTF */
+    case 6:  return 8;   /* INTG */
+    default: return 0;   /* INTH */
+    }
+}
 
 static uint32_t s5l8702_timer_max_val(S5L8702Timer *t) {
     return (t->type == S5L8702_TIMER_TYPE_16) ? 0xFFFF : 0xFFFFFFFF;
@@ -138,7 +156,7 @@ static void s5l8702_timer_update(S5L8702Timer *t) {
         
         if (is_32bit) {
             /* 32-bit timers assert based on TSTAT bits, provided they are enabled in TCON */
-            uint32_t shift = (i == 4) ? 8 : (i == 5) ? 16 : (i == 6) ? 24 : 0;
+            uint32_t shift = s5l8702_timer_tstat_shift(i);
             if ((s->tstat & (4 << shift)) && (ti->tcon & S5L8702_TIMER_TCON_OVF_EN)) irq = true;
             if ((s->tstat & (1 << shift)) && (ti->tcon & S5L8702_TIMER_TCON_INT0_EN)) irq = true;
             if ((s->tstat & (2 << shift)) && (ti->tcon & S5L8702_TIMER_TCON_INT1_EN)) irq = true;
@@ -165,8 +183,7 @@ static void s5l8702_timer_set_tstat(S5L8702Timer *t) {
     uint32_t idx = (uint32_t)(t - &s->timer[0]);
     
     if (idx >= S5L8702_TIMER_COUNT_16 && idx < S5L8702_TIMER_COUNT) {
-        /* Map timer 4->shift 8, 5->16, 6->24, 7->0 */
-        uint32_t shift = (idx == 4) ? 8 : (idx == 5) ? 16 : (idx == 6) ? 24 : 0;
+        uint32_t shift = s5l8702_timer_tstat_shift(idx);
         
         if (t->sched_events & SCHED_EVT_INT0) s->tstat |= (1 << shift);
         if (t->sched_events & SCHED_EVT_INT1) s->tstat |= (2 << shift);
@@ -283,12 +300,23 @@ static uint32_t s5l8702_timer_get_cnt(S5L8702Timer *t) {
 }
 
 /*
- * Free-running 1us counter exposed in the timer MMIO region at offset
- * 0x10000. The Apple OF bootloader reads this to timestamp interrupt
- * arrivals and to drive its software timeouts; if it never advances the
- * boot stalls in an IRQ storm because no scheduled callback ever fires.
+ * Pending-status mirror for the 32-bit timers, at 0x3C710000 (timer base +
+ * 0x10000). It reads back the same INTE/INTF/INTG/INTH bits as TSTAT; the
+ * write-1-to-clear side lives at TSTAT only.
+ *
+ * This was previously modelled as a free-running 1 us counter. It is not:
+ * the only code in the whole EFI + osos boot that touches it is the 32-bit
+ * timer ISR at 0x09efb22c, which does
+ *
+ *      ldr r0, =0x3C710000 ; ldr r0, [r0]      @ read pending
+ *      ldr r1, =0x3C700100 ; str r0, [r1, #24] @ TSTAT = pending  (ack)
+ *
+ * i.e. the canonical read-pending / write-back-to-clear acknowledge. With a
+ * microsecond counter behind that read the ack cleared timer F's bit only
+ * while the counter happened to have bit 16 set, so the level-triggered IRQ
+ * stayed asserted after the first ~131 ms and the handler re-entered forever.
  */
-#define S5L8702_TIMER_USEC          0x10000
+#define S5L8702_TIMER_TSTAT_PEND    0x10000
 
 static uint64_t s5l8702_timer_read(void *opaque, hwaddr offset, unsigned size) {
     S5L8702TimerCtrlState *s = S5L8702_TIMER(opaque);
@@ -298,8 +326,9 @@ static uint64_t s5l8702_timer_read(void *opaque, hwaddr offset, unsigned size) {
     uint32_t r = 0;
     bool implemented = true;
 
-    if (offset == S5L8702_TIMER_USEC) {
-        return (uint32_t)(qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) / 1000ULL);
+    if (offset == S5L8702_TIMER_TSTAT_PEND) {
+        trace_s5l8702_timer_read("tstat_pend", 0, s->tstat);
+        return s->tstat;
     }
 
     switch (offset) {
@@ -442,8 +471,7 @@ static void s5l8702_timer_write(void *opaque, hwaddr offset, uint64_t val, unsig
          * TCON (which the OF firmware does instead of writing TSTAT).
          */
         if (t->type == S5L8702_TIMER_TYPE_32) {
-            uint32_t idx   = tidx;
-            uint32_t shift = (idx == 4) ? 8 : (idx == 5) ? 16 : (idx == 6) ? 24 : 0;
+            uint32_t shift = s5l8702_timer_tstat_shift(tidx);
             if (val & S5L8702_TIMER_TCON_INT0) s->tstat &= ~(1u << shift);
             if (val & S5L8702_TIMER_TCON_INT1) s->tstat &= ~(2u << shift);
             if (val & S5L8702_TIMER_TCON_OVF)  s->tstat &= ~(4u << shift);
@@ -532,7 +560,7 @@ static void s5l8702_timer_write(void *opaque, hwaddr offset, uint64_t val, unsig
         
         /* FIX: Sync TCON flags for 32-bit timers to match TSTAT clears */
         for (uint32_t i = S5L8702_TIMER_COUNT_16; i < S5L8702_TIMER_COUNT; i++) {
-            uint32_t shift = (i == 4) ? 8 : (i == 5) ? 16 : (i == 6) ? 24 : 0;
+            uint32_t shift = s5l8702_timer_tstat_shift(i);
             if (!(s->tstat & (4 << shift))) s->timer[i].tcon &= ~S5L8702_TIMER_TCON_OVF;
             if (!(s->tstat & (1 << shift))) s->timer[i].tcon &= ~S5L8702_TIMER_TCON_INT0;
             if (!(s->tstat & (2 << shift))) s->timer[i].tcon &= ~S5L8702_TIMER_TCON_INT1;
@@ -605,6 +633,28 @@ static void s5l8702_timer_tick(void *opaque) {
         if ((t->tcon & S5L8702_TIMER_TCON_MODE_SEL_MASK) == S5L8702_TIMER_TCON_MODE_SEL(2)) {
             t->running = false;
         }
+    }
+
+    /*
+     * Interval mode is auto-reload on hardware: the TDATA0 compare match ends
+     * the period and the counter restarts from 0. Without it the counter sails
+     * past TDATA0 and only comes back round on the full-width wrap, so TDATA0
+     * stops setting the period at all. Both the stock EFI and osos program the
+     * 32-bit timer at 0xC0 for interval mode, 1 MHz, TDATA0 = 10000 with INT0
+     * enabled -- a 100 Hz system tick -- and never read its counter, so the
+     * compare is the only thing that can define its period. Un-reloaded it is
+     * a 32-bit wrap: one interrupt every 4295 seconds instead of every 10 ms.
+     *
+     * DEFAULT OFF, because turning it on kills the machine: see the
+     * interrupt-acknowledge note on interval_reload in the header. Only INT0
+     * reloads, and only in interval mode -- one-shot already stopped itself on
+     * the overflow above, and capture mode does not own the counter.
+     */
+    if (t->ctrl->interval_reload && (t->sched_events & SCHED_EVT_INT0) &&
+        (t->tcon & S5L8702_TIMER_TCON_MODE_SEL_MASK) ==
+            S5L8702_TIMER_TCON_MODE_SEL(0)) {
+        t->tcnt = 0;
+        t->start_count = 0;
     }
 
     /* Update TSTAT for 32-bit timers (only set on fire, not on every update) */
@@ -683,11 +733,18 @@ static void s5l8702_timer_init(Object *obj) {
     }
 }
 
+static Property s5l8702_timer_props[] = {
+    DEFINE_PROP_BOOL("interval-reload", S5L8702TimerCtrlState, interval_reload,
+                     false),
+    DEFINE_PROP_END_OF_LIST(),
+};
+
 static void s5l8702_timer_class_init(ObjectClass *klass, void *data) {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = s5l8702_timer_realize;
     dc->reset = s5l8702_timer_reset;
+    device_class_set_props(dc, s5l8702_timer_props);
 }
 
 static const TypeInfo s5l8702_timer_types[] = {

@@ -290,6 +290,7 @@ s5l8702_lcd_init(void) "init"
 s5l8702_aes_write(uint32_t offset, uint32_t value) "offset 0x%08x = 0x%08x"
 s5l8702_aes_operation(const char *op, uint32_t size, uint32_t inaddr, uint32_t outaddr) "%s %d bytes from 0x%08x to 0x%08x"
 s5l8702_aes_no_support(const char *keytype) "%s key"
+s5l8702_aes_xfer_too_large(uint32_t size, uint32_t inaddr) "refused %u-byte transfer from 0x%08x"
 s5l8702_aes_reset(void) "reset"
 
 # s5l8702-prng.c

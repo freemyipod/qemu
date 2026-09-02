@@ -22,6 +22,51 @@ With no NAND drive the controller comes up in a stub mode with a built-in
 geometry and no backing storage. That is enough to get through code that only
 probes the chip, not to boot a firmware that mounts it.
 
+Booting RetailOS (osos)
+-----------------------
+
+The stock Apple OS lives on the NAND, not in the NOR, so booting it needs a
+chip that has been through a firmware restore. Two things have to be true.
+
+**The images on the chip must already be plaintext.** The AES engine
+(``s5l8702-aes``) cannot use the SoC's fused GID and UID keys, because nobody
+has them. For the GID key - the one Apple's images are encrypted under - the
+engine is an *identity transform*: whatever the guest hands it comes back
+unchanged, in both directions. So a chip restored from Apple's shipping
+firmware file will not boot here, and a chip restored from a firmware whose
+image bodies were decrypted beforehand (on real hardware, with the headers left
+byte-identical) boots as if the engine had done the work. The UID key, which is
+per-device and never leaves the machine, is handled the other way round: a
+fixed stand-in key is used for real AES-CBC, so that whatever the guest
+encrypts under it, the guest can decrypt again.
+
+**The device must be walked through its own restore.** Push the decrypted
+firmware to disk mode over USB/IP the way iTunes would, let AUPD install it,
+and reboot. This is done once; the resulting chip is kept as a base image and
+every later run is a throwaway overlay on it.
+
+The signature of a successful boot is not obvious, because osos and disk mode
+both load at ``0x08000000``. Look for::
+
+   R15 = 0x22003b0c   WFI in osos's idle loop
+   R14 = 0x080039d4   the osos caller that parked it there
+
+The idle loop is in IRAM (``0x22000000``) rather than DRAM so that DRAM can go
+into self-refresh; the instruction at ``0x22003b08`` is
+``mcr p15, 0, r0, c7, c0, 4``. Reaching it means the EFI's BDS found ``osos``,
+launched it, and osos stood up its idle task. It then stays there - the display
+still holds the picture the EFI drew, and no input wakes it.
+
+Two nearby PCs mean something specific:
+
+``0x0835dd0c``
+  osos polling ``0x3c100000`` for a status bit that never arrives. That is the
+  ``s5l8702-prng`` device; without it osos spins here forever.
+
+``0x080094bc``
+  disk mode's idle spin. Either BDS found no ``osos`` to launch (a blank chip),
+  or it launched one that returned.
+
 NAND images
 -----------
 

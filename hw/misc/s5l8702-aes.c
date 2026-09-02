@@ -9,6 +9,20 @@
 
 #define REG_INDEX(offset) (offset / sizeof(uint32_t))
 
+/* Largest transfer we will act on: the machine's DRAM. */
+#define S5L8702_AES_MAX_XFER (32 * MiB)
+
+/*
+ * Stand-in for the SoC's fused UID key -- arbitrary, but stable, so that a
+ * value the guest encrypts in one boot still decrypts in the next.
+ */
+static const uint8_t s5l8702_aes_uid_key[32] = {
+    0x51, 0x8f, 0x2c, 0xd6, 0x4b, 0x1a, 0xe7, 0x03,
+    0x9c, 0x22, 0xf5, 0x80, 0x37, 0xbe, 0x6d, 0x14,
+    0xa8, 0x59, 0x0e, 0xc3, 0x72, 0xd1, 0x46, 0x9b,
+    0x25, 0xfa, 0x83, 0x1c, 0x60, 0xd7, 0xb4, 0x2e,
+};
+
 static uint64_t s5l8702_aes_read(void *opaque, hwaddr offset,
                                  unsigned size) {
     const S5L8702AesState *s = S5L8702_AES(opaque);
@@ -32,45 +46,107 @@ static void s5l8702_aes_write(void *opaque, hwaddr offset,
 
     switch (offset) {
         case AES_GO: {
-            uint8_t *inbuf;
             uint8_t *buf;
+            uint32_t len = s->insize;
 
-            inbuf = (uint8_t *) malloc(s->insize);
-            cpu_physical_memory_read(s->inaddr, inbuf, s->insize);
+            /*
+             * INSIZE is guest-programmed and the guest does get it wrong: osos
+             * fires GO with INSIZE holding what looks like a peripheral address
+             * (0x38da0000) and IN/OUTADDR = 7. Honouring that means a ~900 MB
+             * host allocation plus a DMA read of the same length from unassigned
+             * space, repeatedly, until the host OOM-kills QEMU. Nothing the
+             * machine can legitimately encrypt is larger than its DRAM, so
+             * refuse anything that big and leave the engine idle-but-finished
+             * rather than letting the guest size a host allocation.
+             */
+            if (len > S5L8702_AES_MAX_XFER) {
+                qemu_log_mask(LOG_GUEST_ERROR,
+                              "%s: refusing %u-byte transfer (max %u)\n",
+                              __func__, len, S5L8702_AES_MAX_XFER);
+                trace_s5l8702_aes_xfer_too_large(len, s->inaddr);
+                s->status = 0xf;
+                break;
+            }
+            uint8_t iv[AES_BLOCK_SIZE];
+            bool decrypt = (s->keylen == 14);
+            AES_KEY key;
+            bool have_key = false;
 
             switch (s->keytype) {
-                case AESGID:
-                    trace_s5l8702_aes_no_support("GID");
-                    break;
-                case AESUID:
-                    trace_s5l8702_aes_no_support("UID");
-                    // AES_set_decrypt_key(key_uid, sizeof(key_uid) * 8, &s->decryptKey);
-                    break;
-                case AESCustom:
-                    AES_set_decrypt_key((uint8_t *) s->custkey, 0x20 * 8, &s->decryptKey);
-                    break;
+            case AESGID:
+                /*
+                 * The GID key is fused into the SoC and unknown to us. Every
+                 * image the guest hands to this engine under it was decrypted
+                 * on real hardware before being fed to QEMU (see
+                 * docs/system/arm/ipod-nano3g.rst), so the engine is an
+                 * identity transform in both directions.
+                 */
+                trace_s5l8702_aes_no_support("GID");
+                break;
+            case AESUID:
+                /*
+                 * The UID key is per-device and equally unknown, but nothing
+                 * outside this machine ever produced UID-encrypted data: the
+                 * guest encrypts and later decrypts its own. A fixed stand-in
+                 * key is therefore self-consistent, which is what the guest
+                 * actually depends on.
+                 */
+                AES_set_decrypt_key(s5l8702_aes_uid_key,
+                                    sizeof(s5l8702_aes_uid_key) * 8,
+                                    &s->decryptKey);
+                AES_set_encrypt_key(s5l8702_aes_uid_key,
+                                    sizeof(s5l8702_aes_uid_key) * 8, &key);
+                have_key = true;
+                break;
+            case AESCustom:
+                AES_set_decrypt_key((uint8_t *) s->custkey, 0x20 * 8,
+                                    &s->decryptKey);
+                AES_set_encrypt_key((uint8_t *) s->custkey, 0x20 * 8, &key);
+                have_key = true;
+                break;
             }
 
-            buf = (uint8_t *) malloc(s->insize);
+            buf = g_malloc(len);
+            cpu_physical_memory_read(s->inaddr, buf, len);
+            memcpy(iv, s->ivec, sizeof(iv));
 
-            bool isDecrypt = s->keylen == 14;
+            if (have_key) {
+                /*
+                 * CBC over the whole transfer. A short tail (the engine is fed
+                 * whole blocks in practice) is passed through untouched rather
+                 * than read past.
+                 */
+                for (uint32_t off = 0; off + AES_BLOCK_SIZE <= len;
+                     off += AES_BLOCK_SIZE) {
+                    uint8_t *blk = buf + off;
 
-            // ignore the GID key because it's assumed anything encrypted with this key has been decrypted prior to emulation
-            if (s->keytype != 0x01) {
-                if(isDecrypt) {
-                    AES_decrypt(inbuf, inbuf, &s->decryptKey);
+                    if (decrypt) {
+                        uint8_t prev[AES_BLOCK_SIZE];
+
+                        memcpy(prev, blk, AES_BLOCK_SIZE);
+                        AES_decrypt(blk, blk, &s->decryptKey);
+                        for (uint32_t i = 0; i < AES_BLOCK_SIZE; i++) {
+                            blk[i] ^= iv[i];
+                        }
+                        memcpy(iv, prev, AES_BLOCK_SIZE);
+                    } else {
+                        for (uint32_t i = 0; i < AES_BLOCK_SIZE; i++) {
+                            blk[i] ^= iv[i];
+                        }
+                        AES_encrypt(blk, blk, &key);
+                        memcpy(iv, blk, AES_BLOCK_SIZE);
+                    }
                 }
             }
-            else memcpy(buf, inbuf, s->insize);
 
-            trace_s5l8702_aes_operation(isDecrypt ? "decrypted" : "encrypted", s->insize, s->inaddr, s->outaddr);
+            trace_s5l8702_aes_operation(decrypt ? "decrypted" : "encrypted",
+                                        len, s->inaddr, s->outaddr);
 
-            // ...existing code...
-            cpu_physical_memory_write((s->outaddr), buf, s->insize);
-            memset(s->custkey, 0, 0x20);
-            memset(s->ivec, 0, 0x10);
-            free(inbuf);
-            free(buf);
+            cpu_physical_memory_write(s->outaddr, buf, len);
+            g_free(buf);
+
+            memset(s->custkey, 0, sizeof(s->custkey));
+            memset(s->ivec, 0, sizeof(s->ivec));
             s->outsize = s->insize;
             s->status = 0xf;
             break;
@@ -95,12 +171,12 @@ static void s5l8702_aes_write(void *opaque, hwaddr offset,
             break;
         case AES_KEY_REG ... ((AES_KEY_REG + AES_KEYSIZE) - 1): {
             uint8_t idx = (offset - AES_KEY_REG) / 4;
-            s->custkey[idx] |= value;
+            s->custkey[idx] = value;
             break;
         }
         case AES_IV_REG ... ((AES_IV_REG + AES_IVSIZE) - 1): {
             uint8_t idx = (offset - AES_IV_REG) / 4;
-            s->ivec[idx] |= value;
+            s->ivec[idx] = value;
             break;
         }
         default:
