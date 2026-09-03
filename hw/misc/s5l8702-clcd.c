@@ -26,6 +26,23 @@
 #define S5L8702_CLCD_WIN_LINELEN    0x10
 #define S5L8702_CLCD_WIN_POS        0x14
 
+/*
+ * The panel scans out portrait (240x320); the picture the firmware composes is
+ * landscape (320x240). firmware reconciles the two in one of two ways per
+ * window, and its geometry setter picks by window index:
+ *
+ *   windows 0 and 1  keep a landscape source buffer and set this config bit,
+ *                    leaving the controller to rotate on scanout;
+ *   windows 2, 3, 4  have no such bit, so the driver swaps width/height (and
+ *                    the source dimensions, and the crop origin) and hands over
+ *                    a buffer that is already transposed.
+ *
+ * We composite into a landscape surface, so it is the second kind that has to
+ * be turned back: without this a 240-wide portrait buffer is painted straight
+ * into the left 240 columns, leaving sideways artwork and a seam at x=240.
+ */
+#define S5L8702_CLCD_WIN_CONFIG_LANDSCAPE_SRC   BIT(28)
+
 static uint32_t clcd_reg(S5L8702ClcdState *s, hwaddr offset) {
     return s->regs[REG_INDEX(offset)];
 }
@@ -70,9 +87,15 @@ static void clcd_draw_window(S5L8702ClcdState *s, unsigned n, uint32_t *dest, in
     uint32_t size = clcd_reg(s, win + S5L8702_CLCD_WIN_SIZE);
     uint32_t pos = clcd_reg(s, win + S5L8702_CLCD_WIN_POS);
     uint32_t stride = clcd_reg(s, win + S5L8702_CLCD_WIN_STRIDE);
-    unsigned bpp = clcd_bytes_per_pixel(clcd_reg(s, win + S5L8702_CLCD_WIN_CONFIG));
-    int w = (size >> 16) & 0xffff;
-    int h = size & 0xffff;
+    uint32_t config = clcd_reg(s, win + S5L8702_CLCD_WIN_CONFIG);
+    unsigned bpp = clcd_bytes_per_pixel(config);
+    bool transposed = !(config & S5L8702_CLCD_WIN_CONFIG_LANDSCAPE_SRC);
+    /* Source buffer extent, in its own storage order. */
+    int src_w = (size >> 16) & 0xffff;
+    int src_h = size & 0xffff;
+    /* Extent on our landscape surface: a transposed source lands turned. */
+    int w = transposed ? src_h : src_w;
+    int h = transposed ? src_w : src_h;
     int x = pos & 0xffff;
     int y;
     g_autofree uint8_t *line = NULL;
@@ -88,6 +111,26 @@ static void clcd_draw_window(S5L8702ClcdState *s, unsigned n, uint32_t *dest, in
     if (w > width - x) w = width - x;
     if (h > height - y) h = height - y;
     if (w <= 0 || h <= 0) return;
+
+    if (transposed) {
+        line = g_malloc((size_t)src_w * bpp);
+
+        for (int col = 0; col < w; col++) {
+            if (dma_memory_read(s->as, base + (hwaddr)col * stride, line,
+                                (size_t)src_w * bpp, MEMTXATTRS_UNSPECIFIED) != MEMTX_OK) {
+                return;
+            }
+
+            for (int i = 0; i < h; i++) {
+                int dy = y + i;
+
+                if (dy < 0) continue;
+                dest[(size_t)dy * width + x + col] =
+                    clcd_pixel(line + (size_t)(src_w - 1 - i) * bpp, bpp);
+            }
+        }
+        return;
+    }
 
     line = g_malloc((size_t)w * bpp);
 
@@ -111,7 +154,7 @@ static void clcd_draw_window(S5L8702ClcdState *s, unsigned n, uint32_t *dest, in
 void s5l8702_clcd_composite(S5L8702ClcdState *s, uint32_t *dest, int width, int height) {
     memset(dest, 0, (size_t)width * height * sizeof(*dest));
 
-    for (unsigned n = 0; n < S5L8702_CLCD_WINDOWS; n++) {
+    for (unsigned n = S5L8702_CLCD_WINDOWS; n-- > 0; ) {
         clcd_draw_window(s, n, dest, width, height);
     }
 }

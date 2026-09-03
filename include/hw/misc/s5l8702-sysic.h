@@ -25,6 +25,7 @@ struct S5L8702SysICState {
 
     qemu_irq gpio_irqs[S5L8702_SYSIC_GPIO_GROUPS];
 
+    uint32_t power_config;
     uint32_t power_state;
 
     uint32_t gpio_int_level[S5L8702_SYSIC_GPIO_GROUPS];

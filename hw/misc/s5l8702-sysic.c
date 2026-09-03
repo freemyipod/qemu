@@ -6,6 +6,7 @@
 #include "trace.h"
 
 /* Power Management */
+#define SYSIC_POWER_CONFIG   0x00
 #define SYSIC_POWER_SETSTATE 0x08
 #define SYSIC_POWER_ONCTRL   0x0C
 #define SYSIC_POWER_OFFCTRL  0x10
@@ -29,6 +30,17 @@ static uint64_t s5l8702_sysic_read(void *opaque, hwaddr addr, unsigned size) {
     uint32_t val = 0;
 
     switch (addr) {
+    /*
+     * osos's sleep routine (in IRAM at 0x22002d78) read-modify-writes this
+     * register and then spins, with interrupts disabled, until bit 0 reads
+     * back set -- so returning a constant 0 wedges the CPU for good, leaving
+     * the CLCD showing the last frame it composed and the machine looking
+     * merely unresponsive. A plain latch is enough: the firmware sets the bit
+     * itself and only wants to see it take.
+     */
+    case SYSIC_POWER_CONFIG:
+        val = s->power_config;
+        break;
     case SYSIC_POWER_ID:
         val = (2 << 0x18);
         break;
@@ -68,6 +80,9 @@ static void s5l8702_sysic_write(void *opaque, hwaddr addr, uint64_t val, unsigne
     trace_s5l8702_sysic_write((uint32_t)addr, (uint32_t)val);
 
     switch (addr) {
+    case SYSIC_POWER_CONFIG:
+        s->power_config = val;
+        break;
     case SYSIC_POWER_ONCTRL:
         trace_s5l8702_sysic_power_onctrl((uint32_t)val);
         if ((val & 0x20) != 0 || (val & 0x4) != 0 || (val & POWER_ID_ADM) != 0) {
