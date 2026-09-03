@@ -6,6 +6,7 @@
 #include "hw/irq.h"
 #include "qemu/timer.h"
 #include "hw/gpio/s5l8702-gpio.h"
+#include "ui/input.h"
 
 #define TYPE_S5L8702_CLICKWHEEL    "s5l8702-clickwheel"
 OBJECT_DECLARE_SIMPLE_TYPE(S5L8702ClickwheelState, S5L8702_CLICKWHEEL)
@@ -21,12 +22,23 @@ OBJECT_DECLARE_SIMPLE_TYPE(S5L8702ClickwheelState, S5L8702_CLICKWHEEL)
  * WHEEL00  0x00  - Control: 0=stop, non-zero=start (e.g. 0x380000)
  * WHEEL04  0x04  - Enable: bit 0 = enable controller
  * WHEEL08  0x08  - Timing register (e.g. 0x20000)
- * WHEEL0C  0x0C  - Unknown
- * WHEEL10  0x10  - Config register (e.g. 1)
- * WHEELINT 0x14  - Interrupt status (write to clear; bit0/1/2 = event flags)
+ * WHEEL0C  0x0C  - Interrupt status, read-only: bit 0 = a packet is waiting in WHEELRX.
+ * WHEEL10  0x10  - Interrupt enable: bit 0 = deliver interrupts
+ * WHEELINT 0x14  - Interrupt acknowledge (write to clear; bit0/1/2 = events).
  * WHEELRX  0x18  - Received data from clickwheel
  * WHEELTX  0x1C  - Transmit data to clickwheel (init cmd = 0x8000023A)
+ *
+ * WHEELRX Packet Word:
+ *   init mode     (value & 0x8000FFFF) == 0x8000023A
+ *                 buttons in bits [20:16]
+ *   normal mode   (value & 0xBC0000FF) == 0x8000001A
+ *                 buttons in bits [12:8]
+ *                 bit 30      = a finger is on the wheel
+ *                 bits [25:16] = wheel position, 0..95 (96 per revolution).
+ *                 0x60 modulus, which is where the 96 comes from.
  */
+
+#define S5L8702_CLICKWHEEL_POSITIONS 96
 
 struct S5L8702ClickwheelState {
     /*< private >*/
@@ -41,7 +53,6 @@ struct S5L8702ClickwheelState {
     /* Reference to GPIO state (set by parent SoC) for reading button state */
     S5L8702GpioState *gpio;
 
-    /* Registers */
     uint32_t reg_control;   /* WHEEL00 */
     uint32_t reg_enable;    /* WHEEL04 */
     uint32_t reg_timing;    /* WHEEL08 */
@@ -51,10 +62,17 @@ struct S5L8702ClickwheelState {
     uint32_t reg_rx;        /* WHEELRX */
     uint32_t reg_tx;        /* WHEELTX */
 
-    /* Internal state */
     bool enabled;
-    bool init_sent;         /* WHEELTX received init command (0x8000023A) */
-    QEMUTimer *init_timer;  /* one-shot timer for init response */
+    bool init_sent;         // WHEELTX received init command (0x8000023A)
+    QEMUTimer *init_timer;  // one-shot timer for init response
+
+    QemuInputHandlerState *input;
+    QEMUTimer *release_timer; // lifts the "finger" after the scrolling stops
+    uint32_t wheel_pos;       // 0..S5L8702_CLICKWHEEL_POSITIONS-1
+    bool wheel_touched;       // a finger is on the wheel right now
+
+    uint32_t scroll_step;     // wheel positions per host scroll click
+    uint32_t release_ms;      // idle time before the finger lifts
 };
 
 #endif /* HW_MISC_S5L8702_CLICKWHEEL_H */

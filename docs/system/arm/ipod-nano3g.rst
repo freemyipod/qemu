@@ -67,6 +67,34 @@ Two nearby PCs mean something specific:
   disk mode's idle spin. Either BDS found no ``osos`` to launch (a blank chip),
   or it launched one that returned.
 
+Input: the clickwheel
+---------------------
+
+Buttons are on the arrow keys plus Enter: Menu is Up, Play/Pause is Down,
+Previous is Left, Next is Right, Select is Enter.
+
+**Turning the wheel is the host's scroll wheel.** One click of it moves a
+finger around the clickwheel and, in RetailOS, one item up or down a menu.
+Scrolling down turns clockwise. The finger stays on the wheel while you keep
+scrolling and lifts off shortly after you stop, which is what the firmware
+expects: it treats the first packet of a touch as a reference position and
+only counts the movement after it.
+
+Two properties on ``s5l8702-clickwheel`` control the feel:
+
+``scroll-step`` (default 6)
+  Wheel positions travelled per scroll click, out of the 96 in one
+  revolution. RetailOS moves one menu item per six positions, and ignores
+  the first six positions of a touch as a dead zone - so a step of 6 gives
+  one item per click and anything below it scrolls nothing at all. Raise it
+  to move faster.
+``scroll-release-ms`` (default 300)
+  How long after the last click the finger stays on the wheel.
+
+.. code-block:: console
+
+   $ qemu-system-arm -M ipod-nano3g,... -global s5l8702-clickwheel.scroll-step=12
+
 NAND images
 -----------
 

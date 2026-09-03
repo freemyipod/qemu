@@ -4,6 +4,8 @@
 #include "qemu/module.h"
 #include "qemu/timer.h"
 #include "hw/misc/s5l8702-clickwheel.h"
+#include "hw/qdev-properties.h"
+#include "ui/input.h"
 #include "trace.h"
 
 /* Register offsets */
@@ -25,11 +27,11 @@
  * Two formats are used on S5L8702:
  *   Init response:  (status & 0x8000FFFF) == 0x8000023A
  *                   buttons in bits [20:16]
- *   Normal update:  (status & 0x800000FF) == 0x8000001A
- *                   buttons in bits [12:8]
+ *   Normal update:  (status & 0xBC0000FF) == 0x8000001A
+ *                   buttons in bits [12:8], bit 30 = finger down,
+ *                   bits [25:16] = wheel position (96 per revolution)
  */
-static uint32_t build_rx_init(S5L8702ClickwheelState *s)
-{
+static uint32_t build_rx_init(S5L8702ClickwheelState *s) {
     uint32_t rx = 0x8000023A;
     if (s->gpio) {
         if (s->gpio->clickwheel_select_pressed) rx |= (1 << 16);
@@ -41,8 +43,7 @@ static uint32_t build_rx_init(S5L8702ClickwheelState *s)
     return rx;
 }
 
-static uint32_t build_rx_normal(S5L8702ClickwheelState *s)
-{
+static uint32_t build_rx_normal(S5L8702ClickwheelState *s) {
     uint32_t rx = 0x8000001A;
     if (s->gpio) {
         if (s->gpio->clickwheel_select_pressed) rx |= (1 << 8);
@@ -51,38 +52,138 @@ static uint32_t build_rx_normal(S5L8702ClickwheelState *s)
         if (s->gpio->clickwheel_play_pressed)   rx |= (1 << 11);
         if (s->gpio->clickwheel_menu_pressed)   rx |= (1 << 12);
     }
+    if (s->wheel_touched) {
+        // Bit 30 is "finger is present" and the position is encoded in bits [25:16]
+        rx |= (1u << 30) | ((s->wheel_pos & 0x3FF) << 16);
+    }
     return rx;
 }
 
-/* Called by one-shot timer after the firmware enables the controller */
+static void clickwheel_update_irq(S5L8702ClickwheelState *s) {
+    qemu_set_irq(s->irq, (s->reg_int != 0 && (s->reg_config & 1)) ? 1 : 0);
+}
+
+static bool clickwheel_enabled(S5L8702ClickwheelState *s) {
+    return (s->reg_control & 0x00300000) != 0 || (s->reg_enable & 0x1) != 0;
+}
+
+static void clickwheel_deliver(S5L8702ClickwheelState *s) {
+    s->reg_rx = build_rx_normal(s);
+    s->reg_int |= WHEELINT_RX;
+    clickwheel_update_irq(s);
+}
+
 static void clickwheel_init_cb(void *opaque){
     S5L8702ClickwheelState *s = S5L8702_CLICKWHEEL(opaque);
 
     trace_s5l8702_clickwheel_init_response();
 
-    /* Deliver the init/"hello" response: data in WHEELRX, signal RX-ready */
+    // Deliver the init/"hello" response: data in WHEELRX, signal RX-ready
     s->reg_rx = build_rx_init(s);
     s->reg_int |= WHEELINT_RX;
-    qemu_irq_raise(s->irq);
+    clickwheel_update_irq(s);
 }
 
 /*
- * Public function: called by the key event handler (via a named GPIO input)
- * whenever button state changes.  Delivers a normal-type button update.
+ * The scrolling stopped, so lift the finger: one more packet with bit 30
+ * clear, which is what tells the firmware to re-arm its start-of-scroll
+ * dead zone rather than treating the next touch as continued motion.
  */
+static void clickwheel_release_cb(void *opaque) {
+    S5L8702ClickwheelState *s = S5L8702_CLICKWHEEL(opaque);
+
+    if (!s->wheel_touched) {
+        return;
+    }
+    s->wheel_touched = false;
+    trace_s5l8702_clickwheel_wheel_release(s->wheel_pos);
+
+    if (clickwheel_enabled(s)) {
+        clickwheel_deliver(s);
+    }
+}
+
+/*
+ * One click of the host scroll wheel = scroll_step positions around the
+ * clickwheel, in the direction a finger would travel: scrolling down is
+ * clockwise, which is increasing position.
+ *
+ * A real finger arrives before it moves, and the firmware needs that: the
+ * first packet of a touch only establishes the reference position, and the
+ * move after it has to clear a dead zone of 6 positions before RetailOS
+ * counts it. So a touch always emits the reference packet first, and the
+ * default step is comfortably past the dead zone.
+ */
+static void clickwheel_scroll(S5L8702ClickwheelState *s, int direction) {
+    uint32_t step = s->scroll_step % S5L8702_CLICKWHEEL_POSITIONS;
+
+    if (!clickwheel_enabled(s)) return;
+
+    if (!s->wheel_touched) {
+        s->wheel_touched = true;
+        clickwheel_deliver(s);
+    }
+
+    s->wheel_pos = (s->wheel_pos + S5L8702_CLICKWHEEL_POSITIONS + direction * (int)step) % S5L8702_CLICKWHEEL_POSITIONS;
+    trace_s5l8702_clickwheel_wheel_scroll(direction, s->wheel_pos);
+    clickwheel_deliver(s);
+
+    timer_mod_ns(s->release_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + (int64_t)s->release_ms * SCALE_MS);
+}
+
+static void clickwheel_input_event(DeviceState *dev, QemuConsole *src, InputEvent *evt) {
+    S5L8702ClickwheelState *s = S5L8702_CLICKWHEEL(dev);
+    InputBtnEvent *btn;
+
+    if (evt->type != INPUT_EVENT_KIND_BTN) return;
+    
+    btn = evt->u.btn.data;
+    if (!btn->down) return;
+
+    switch (btn->button) {
+    case INPUT_BUTTON_WHEEL_DOWN:
+        clickwheel_scroll(s, +1);
+        break;
+    case INPUT_BUTTON_WHEEL_UP:
+        clickwheel_scroll(s, -1);
+        break;
+    default:
+        break;
+    }
+}
+
+static const QemuInputHandler clickwheel_input_handler = {
+    .name  = "iPod clickwheel",
+    .mask  = INPUT_EVENT_MASK_BTN,
+    .event = clickwheel_input_event,
+};
+
 static void s5l8702_clickwheel_button_update(void *opaque, int n, int level) {
     S5L8702ClickwheelState *s = S5L8702_CLICKWHEEL(opaque);
 
-    if (!s->enabled) {
-        return;
-    }
+    if (!clickwheel_enabled(s)) return;
 
     trace_s5l8702_clickwheel_button_update();
+    clickwheel_deliver(s);
+}
 
-    /* Data in WHEELRX; signal RX-ready (bit 0) so the firmware reads it */
-    s->reg_rx = build_rx_normal(s);
-    s->reg_int |= WHEELINT_RX;
-    qemu_irq_raise(s->irq);
+static void s5l8702_clickwheel_enable_changed(S5L8702ClickwheelState *s, bool was_enabled) {
+    bool now = clickwheel_enabled(s);
+
+    if (now == was_enabled) {
+        return;
+    }
+    s->enabled = now;
+
+    if (now) {
+        /* Small delay so the firmware can finish the rest of its setup
+         * writes before the first packet lands. */
+        timer_mod_ns(s->init_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 1000);
+    } else {
+        timer_del(s->init_timer);
+        timer_del(s->release_timer);
+        s->wheel_touched = false;
+    }
 }
 
 static uint64_t s5l8702_clickwheel_read(void *opaque, hwaddr offset, unsigned size) {
@@ -102,8 +203,8 @@ static uint64_t s5l8702_clickwheel_read(void *opaque, hwaddr offset, unsigned si
         return s->reg_timing;
 
     case WHEEL0C:
-        trace_s5l8702_clickwheel_reg_read("WHEEL0C", s->reg_unk0c);
-        return s->reg_unk0c;
+        trace_s5l8702_clickwheel_reg_read("WHEEL0C", s->reg_int);
+        return s->reg_int;
 
     case WHEEL10:
         trace_s5l8702_clickwheel_reg_read("WHEEL10", s->reg_config);
@@ -131,34 +232,23 @@ static void s5l8702_clickwheel_write(void *opaque, hwaddr offset, uint64_t val, 
     S5L8702ClickwheelState *s = S5L8702_CLICKWHEEL(opaque);
 
     switch (offset) {
-    case WHEEL00:
+    case WHEEL00: {
+        bool was_enabled = clickwheel_enabled(s);
+
         trace_s5l8702_clickwheel_reg_write("WHEEL00", (uint32_t)val);
         s->reg_control = val;
-        if (val == 0) {
-            /* Stop: disable and cancel any pending init timer */
-            s->enabled = false;
-            timer_del(s->init_timer);
-        }
+        s5l8702_clickwheel_enable_changed(s, was_enabled);
         break;
+    }
 
-    case WHEEL04:
+    case WHEEL04: {
+        bool was_enabled = clickwheel_enabled(s);
+
         trace_s5l8702_clickwheel_reg_write("WHEEL04", (uint32_t)val);
         s->reg_enable = val;
-        if (val & 0x1) {
-            /* Enable bit set: controller is now active */
-            s->enabled = true;
-            /*
-             * If the firmware already wrote the init command (WHEELTX =
-             * 0x8000023A) before enabling, fire the init response now.
-             * Use a small delay to let the firmware finish its setup writes.
-             */
-            if (s->init_sent) {
-                timer_mod_ns(s->init_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 1000);
-            }
-        } else {
-            s->enabled = false;
-        }
+        s5l8702_clickwheel_enable_changed(s, was_enabled);
         break;
+    }
 
     case WHEEL08:
         trace_s5l8702_clickwheel_reg_write("WHEEL08", (uint32_t)val);
@@ -173,43 +263,26 @@ static void s5l8702_clickwheel_write(void *opaque, hwaddr offset, uint64_t val, 
     case WHEEL10:
         trace_s5l8702_clickwheel_reg_write("WHEEL10", (uint32_t)val);
         s->reg_config = val;
+        clickwheel_update_irq(s);
         break;
 
     case WHEELINT:
-        /*
-         * Write-to-clear: firmware writes back the bits it wants to clear.
-         * Lower interrupt line once all pending bits are cleared.
-         */
         trace_s5l8702_clickwheel_reg_write("WHEELINT", (uint32_t)val);
         s->reg_int &= ~val;
-        if (s->reg_int == 0) {
-            qemu_irq_lower(s->irq);
-        }
+        clickwheel_update_irq(s);
         break;
 
     case WHEELTX:
         trace_s5l8702_clickwheel_reg_write("WHEELTX", (uint32_t)val);
         s->reg_tx = val;
-        /*
-         * 0x8000023A is the init/poll command the firmware sends during
-         * s5l_clickwheel_init().  Remember it was sent; if the controller is
-         * already enabled schedule the response now, otherwise it will be
-         * scheduled when WHEEL04 bit-0 is set.
-         */
         if ((val & 0x8000FFFF) == 0x8000023A) {
             s->init_sent = true;
             if (s->enabled) {
                 timer_mod_ns(s->init_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 1000);
             }
         }
-        /*
-         * Acknowledge the TX write immediately with a TX-complete interrupt
-         * (bit 1).  The firmware clears this without reading WHEELRX.
-         * The actual reply (init response or button data) arrives later
-         * via the init_timer and raises bit 0 (RX ready).
-         */
         s->reg_int |= WHEELINT_TX;
-        qemu_irq_raise(s->irq);
+        clickwheel_update_irq(s);
         break;
 
     default:
@@ -234,6 +307,10 @@ static void s5l8702_clickwheel_reset(DeviceState *dev) {
     trace_s5l8702_clickwheel_reset();
 
     timer_del(s->init_timer);
+    timer_del(s->release_timer);
+
+    s->wheel_pos     = 0;
+    s->wheel_touched = false;
 
     s->reg_control = 0;
     s->reg_enable  = 0;
@@ -251,6 +328,10 @@ static void s5l8702_clickwheel_realize(DeviceState *dev, Error **errp) {
     S5L8702ClickwheelState *s = S5L8702_CLICKWHEEL(dev);
 
     s->init_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, clickwheel_init_cb, s);
+    s->release_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, clickwheel_release_cb, s);
+
+    /* The host scroll wheel drives the clickwheel. */
+    s->input = qemu_input_handler_register(dev, &clickwheel_input_handler);
 }
 
 static void s5l8702_clickwheel_init(Object *obj) {
@@ -271,13 +352,28 @@ static void s5l8702_clickwheel_init(Object *obj) {
 static void s5l8702_clickwheel_finalize(Object *obj) {
     S5L8702ClickwheelState *s = S5L8702_CLICKWHEEL(obj);
     timer_free(s->init_timer);
+    timer_free(s->release_timer);
 }
+
+static Property s5l8702_clickwheel_properties[] = {
+    /*
+     * Wheel positions travelled per click of the host scroll wheel. RetailOS
+     * moves one menu item per 6 positions, and ignores the first 6 positions
+     * of a touch as a dead zone, so 6 is both the smallest step that moves
+     * anything at all and the one that gives one item per click.
+     */
+    DEFINE_PROP_UINT32("scroll-step", S5L8702ClickwheelState, scroll_step, 6),
+    /* How long after the last click the finger stays on the wheel. */
+    DEFINE_PROP_UINT32("scroll-release-ms", S5L8702ClickwheelState, release_ms, 300),
+    DEFINE_PROP_END_OF_LIST(),
+};
 
 static void s5l8702_clickwheel_class_init(ObjectClass *klass, void *data) {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->reset   = s5l8702_clickwheel_reset;
     dc->realize = s5l8702_clickwheel_realize;
+    device_class_set_props(dc, s5l8702_clickwheel_properties);
 }
 
 static const TypeInfo s5l8702_clickwheel_types[] = {

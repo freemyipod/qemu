@@ -347,6 +347,8 @@ s5l8702_clickwheel_init_response(void) "generating init response interrupt"
 s5l8702_clickwheel_button_update(void) "button state changed, raising interrupt"
 s5l8702_clickwheel_reg_read(const char *reg, uint32_t val) "%s -> 0x%08x"
 s5l8702_clickwheel_reg_write(const char *reg, uint32_t val) "%s <- 0x%08x"
+s5l8702_clickwheel_wheel_scroll(int direction, uint32_t pos) "wheel scroll dir=%d -> position %u"
+s5l8702_clickwheel_wheel_release(uint32_t pos) "wheel released at position %u"
 
 # s5l8702-nand.c
 s5l8702_nand_init(void) "init"
