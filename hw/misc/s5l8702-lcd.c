@@ -3,6 +3,7 @@
 #include "qemu/log.h"
 #include "qemu/module.h"
 #include "hw/misc/s5l8702-lcd.h"
+#include "hw/misc/s5l8702-clcd.h"
 #include "ui/pixel_ops.h"
 #include "ui/console.h"
 #include "hw/display/framebuffer.h"
@@ -333,6 +334,29 @@ static void fb_update_display(void *opaque) {
 
     if (!s->con || !surface_bits_per_pixel(surface))
         return;
+
+    // if clcd is enabled, compose and use that image data instead
+    // if it's not enabled (non osos), the LCD is written to pixel by pixel by the firmware
+    if (s5l8702_clcd_enabled(s->clcd)) {
+        uint32_t *composed = g_new(uint32_t, 320 * 240);
+        uint8_t *dst = surface_data(surface);
+
+        s5l8702_clcd_composite(s->clcd, composed, 320, 240);
+
+        linesize = surface_stride(surface);
+        for (int y = 0; y < 240; y++) {
+            uint32_t *row = (uint32_t *)(dst + (size_t)y * linesize);
+            for (int x = 0; x < 320; x++) {
+                uint32_t p = composed[y * 320 + x];
+                row[x] = rgb_to_pixel32((p >> 16) & 0xff, (p >> 8) & 0xff,
+                                        p & 0xff);
+            }
+        }
+        g_free(composed);
+        dpy_gfx_update(s->con, 0, 0, 320, 240);
+        s->invalidate = false;
+        return;
+    }
 
     dest_width = 4;
     draw_line = draw_line32_32;

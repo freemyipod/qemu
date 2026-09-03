@@ -10,6 +10,7 @@
 #include "qemu/timer.h"
 #include "hw/sysbus.h"
 #include "hw/irq.h"
+#include "hw/misc/s5l8702-clcd.h"
 
 #define TYPE_S5L8702_LCD    "s5l8702-lcd"
 OBJECT_DECLARE_SIMPLE_TYPE(S5L8702LcdState, S5L8702_LCD)
@@ -39,6 +40,8 @@ struct S5L8702LcdState {
 
     MemoryRegion *sysmem;
     AddressSpace *nsas;
+
+    S5L8702ClcdState *clcd;
     MemoryRegionSection fbsection;
     qemu_irq irq;
 

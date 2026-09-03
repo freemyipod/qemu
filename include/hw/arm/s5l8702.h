@@ -27,6 +27,7 @@
 #include "hw/dma/pl080.h"
 #include "hw/ide/s5l8702-ata.h"
 #include "hw/misc/s5l8702-buscon.h"
+#include "hw/misc/s5l8702-clcd.h"
 
 #define TYPE_S5L8702    "s5l8702"
 OBJECT_DECLARE_SIMPLE_TYPE(S5L8702State, S5L8702)
@@ -106,6 +107,7 @@ struct S5L8702State {
     S5L8702UsbPhyState usbphy;
     S5L8702SysICState sysic;
     S5L8702BusConState buscon;
+    S5L8702ClcdState clcd;
     DeviceState* uart[4];
 };
 

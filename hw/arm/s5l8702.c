@@ -66,6 +66,7 @@ static void s5l8702_init(Object *obj) {
 
     object_initialize_child(obj, "timer", &s->timer, TYPE_S5L8702_TIMER);
     object_initialize_child(obj, "lcd", &s->lcd, TYPE_S5L8702_LCD);
+    object_initialize_child(obj, "clcd", &s->clcd, TYPE_S5L8702_CLCD);
     object_initialize_child(obj, "jpeg", &s->jpeg, TYPE_S5L8702_JPEG);
 
     for (uint32_t i = 0; i < ARRAY_SIZE(s->dma); i++) {
@@ -162,9 +163,15 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
     sysbus_connect_irq(SYS_BUS_DEVICE(&s->timer), 0, qdev_get_gpio_in(glue, S5L8702_TIMER_IRQ_16BIT));
     sysbus_connect_irq(SYS_BUS_DEVICE(&s->timer), 1, qdev_get_gpio_in(glue, S5L8702_TIMER_IRQ_32BIT));
 
+    /* CLCD */
+    s->clcd.as = cpu_get_address_space(CPU(&s->cpu), ARMASIdx_NS);
+    sysbus_realize(SYS_BUS_DEVICE(&s->clcd), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->clcd), 0, S5L8702_CLCD_BASE);
+
     /* LCD */
     s->lcd.sysmem = get_system_memory();
     s->lcd.nsas = cpu_get_address_space(CPU(&s->cpu), ARMASIdx_NS);
+    s->lcd.clcd = &s->clcd;
     allocate_ram(s->lcd.sysmem, "framebuffer", FRAMEBUFFER_MEM_BASE, align_64k_high(4 * 320 * 480));
     sysbus_realize(SYS_BUS_DEVICE(&s->lcd), &error_fatal);
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->lcd), 0, S5L8702_LCD_BASE);

@@ -48,6 +48,7 @@ softmmu_ss.add(when: 'CONFIG_S5L8702', if_true: files(
   's5l8702-aes.c',
   's5l8702-buscon.c',
   's5l8702-chipid.c',
+  's5l8702-clcd.c',
   's5l8702-clickwheel.c',
   's5l8702-clk.c',
   's5l8702-jpeg.c',
