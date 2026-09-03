@@ -95,6 +95,38 @@ Two properties on ``s5l8702-clickwheel`` control the feel:
 
    $ qemu-system-arm -M ipod-nano3g,... -global s5l8702-clickwheel.scroll-step=12
 
+USB: plugging the cable in and out
+----------------------------------
+
+**Nothing is plugged into the dock connector by default.** The USB PHY sees no
+VBUS, so ``GOTGCTL.BSesVld`` reads back clear, the model never plays the part
+of a host, and the PMU reports no power source. RetailOS therefore boots to
+its own UI instead of the "Connected / Eject before disconnecting" screen.
+
+Start with a cable already attached:
+
+.. code-block:: console
+
+   $ qemu-system-arm -M ipod-nano3g,... -global s5l8702-usbotg.usb-connected=on
+
+or plug and unplug while the machine runs, from the monitor:
+
+.. code-block:: console
+
+   (qemu) qom-set /machine/soc/usbotg usb-connected true
+   (qemu) qom-set /machine/soc/usbotg usb-connected false
+
+A USB/IP client importing the device counts as plugging the cable in, so an
+attach still works on a machine that started with nothing connected.
+
+The firmware notices a change on its own schedule rather than instantly - the
+charging indicator and the disk-mode screen can take the better part of a
+minute to catch up, because the PMU's interrupt line is not modelled and
+RetailOS only re-reads the power status periodically. **Unplugging while
+RetailOS is showing the "Connected" screen tears the USB stack down** (it
+soft-disconnects and gates the PHY clocks) **but does not dismiss that
+screen**; it stays up until the machine is reset.
+
 NAND images
 -----------
 

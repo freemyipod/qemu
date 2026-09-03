@@ -26,6 +26,8 @@ struct D1671State {
 
     uint8_t regs[0xFF];
     uint16_t adc[16];
+
+    bool usb_power;
 };
 
 #endif /* HW_MISC_D1671_H */

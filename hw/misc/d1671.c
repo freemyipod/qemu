@@ -20,8 +20,11 @@ static uint8_t d1671_read(D1671State *s, uint8_t addr) {
 
     switch (addr) {
     case D1671_STATUSA:
-        r = D1671_STATUSA_USB_DETECTED | D1671_STATUSA_FIREWIRE_DETECTED | 
-            D1671_STATUSA_ACCESSORY_DETECTED | D1671_STATUSA_CHARGER_DETECTED;
+        // All of these mean "something is in the dock connector", so they follow the cable rather than being wired on.
+        r = s->usb_power ? (D1671_STATUSA_USB_DETECTED |
+                            D1671_STATUSA_FIREWIRE_DETECTED |
+                            D1671_STATUSA_ACCESSORY_DETECTED |
+                            D1671_STATUSA_CHARGER_DETECTED) : 0;
         register_name = "STATUSA";
         break;
     case D1671_STATUSB:
@@ -58,7 +61,7 @@ static uint8_t d1671_read(D1671State *s, uint8_t addr) {
     return r;
 }
 
-static void d1671_write(D1671State *s, uint8_t addr, uint8_t data){
+static void d1671_write(D1671State *s, uint8_t addr, uint8_t data) {
     trace_d1671_write(addr, data);
     s->regs[addr] = data;
 }
@@ -95,6 +98,17 @@ static int d1671_send(I2CSlave *slave, uint8_t data) {
     return 0;
 }
 
+static void d1671_usb_power(void *opaque, int n, int level) {
+    D1671State *s = D1671(opaque);
+
+    s->usb_power = level != 0;
+    trace_d1671_usb_power(s->usb_power);
+}
+
+static void d1671_init(Object *obj) {
+    qdev_init_gpio_in_named(DEVICE(obj), d1671_usb_power, "usb-power", 1);
+}
+
 static void d1671_reset(DeviceState *dev) {
     D1671State *s = D1671(dev);
     memset(s->regs, 0, sizeof(s->regs));
@@ -121,6 +135,7 @@ static const TypeInfo d1671_types[] = {
         .name = TYPE_D1671,
         .parent = TYPE_I2C_SLAVE,
         .instance_size = sizeof(D1671State),
+        .instance_init = d1671_init,
         .class_init = d1671_class_init,
     },
 };

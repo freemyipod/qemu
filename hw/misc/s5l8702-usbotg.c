@@ -18,6 +18,8 @@
 static void s5l8702_usbotg_update_irq(S5L8702UsbOtgState *s);
 static void s5l8702_usbotg_update_ep(S5L8702UsbOtgState *s, S5L8702UsbEpState *ep);
 static void usbip_client_readable(void *opaque);
+static void s5l8702_usbotg_set_cable(S5L8702UsbOtgState *s, bool connected);
+static void usbotg_maybe_start_enumeration(S5L8702UsbOtgState *s);
 
 /* ============================================================
  * USB/IP Server Implementation
@@ -797,6 +799,12 @@ static void usbip_client_readable(void *opaque)
             if (!usbip_send_import_reply(s)) { usbip_disconnect(s); return; }
             s->usbip_device_imported = true;
             trace_s5l8702_usbotg_imported(s->enumeration_phase);
+            /* A USB/IP host importing the device is a cable being plugged in.
+             * Do it implicitly so an attach still works when the machine was
+             * started (as it is by default) with nothing plugged in. */
+            if (!s->usb_connected) {
+                s5l8702_usbotg_set_cable(s, true);
+            }
             if (s->enumeration_phase == 1) {
                 s->gintsts |= (1 << 13);  /* ENUMDONE */
                 s->enumeration_phase = 2;
@@ -1087,7 +1095,8 @@ static uint64_t s5l8702_usbotg_read(void *opaque, hwaddr offset, unsigned size)
      *  16        - ZLP IN pending
      *  17        - MSC active (enumeration complete)
      */
-    if (offset == GINTSTS && s->gintsts == 0 && !s->usbip_device_imported) {
+    if (offset == GINTSTS && s->gintsts == 0 && !s->usbip_device_imported &&
+        s->usb_connected) {
         /* Lookup table: {phase, threshold, setup_bytes, description} */
         static const struct {
             int phase;
@@ -1569,6 +1578,37 @@ static void s5l8702_usbotg_out_ep_write(S5L8702UsbOtgState *s, uint8_t ep, hwadd
     }
 }
 
+/*
+ * Both halves of a USB attach have to be in place before anything enumerates:
+ * the firmware must have applied its D+ pullup (DCTL SftDiscon clear with
+ * ProgDone set) and a cable must be plugged in. Whichever arrives second gets
+ * here, so this is called from the DCTL write and from the cable toggle.
+ */
+static void usbotg_maybe_start_enumeration(S5L8702UsbOtgState *s)
+{
+    bool pullup_on = (s->dctl & 0x2) == 0 && (s->dctl & 0x800) != 0;
+
+    if (!pullup_on || !s->usb_connected || s->enumeration_phase != 0) {
+        return;
+    }
+
+    s->gintsts_poll_count = 0;
+    if (s->usbip_device_imported) {
+        /* USB/IP already imported: inject ENUMDONE immediately */
+        s->gintsts |= (1 << 13);
+        s->enumeration_phase = 2;
+        /* Re-arm fd handler after reset - client is waiting for us */
+        if (s->usbip_client_fd >= 0) {
+            qemu_set_fd_handler(s->usbip_client_fd, usbip_client_readable, NULL, s);
+        }
+        trace_s5l8702_usbotg_connected(1);
+        s5l8702_usbotg_update_irq(s);
+    } else {
+        s->enumeration_phase = 1;
+        trace_s5l8702_usbotg_connected(0);
+    }
+}
+
 static void s5l8702_usbotg_write(void *opaque, hwaddr offset, uint64_t val, unsigned size)
 {
     S5L8702UsbOtgState *s = S5L8702_USBOTG(opaque);
@@ -1583,7 +1623,10 @@ static void s5l8702_usbotg_write(void *opaque, hwaddr offset, uint64_t val, unsi
             break;
 
         case GOTGCTL:
-            s->gotgctl = value;
+            /* BSesVld reflects VBUS on the cable and is read-only to the
+             * firmware; everything else is writable. */
+            s->gotgctl = (value & ~GOTGCTL_BSESSIONVALID) |
+                         (s->usb_connected ? GOTGCTL_BSESSIONVALID : 0);
             break;
 
         case GOTGINT:
@@ -1689,23 +1732,7 @@ static void s5l8702_usbotg_write(void *opaque, hwaddr offset, uint64_t val, unsi
 
             /* DCTL = 0xd00: CGNPInNAK | CGOUTNak | ProgDone, SftDiscon clear.
              * Firmware just finished USB core init and connected (D+ pullup active). */
-            if ((value & 0x2) == 0 && (value & 0x800) != 0 && s->enumeration_phase == 0) {
-                s->gintsts_poll_count = 0;
-                if (s->usbip_device_imported) {
-                    /* USB/IP already imported: inject ENUMDONE immediately */
-                    s->gintsts |= (1 << 13);
-                    s->enumeration_phase = 2;
-                    /* Re-arm fd handler after reset - client is waiting for us */
-                    if (s->usbip_client_fd >= 0) {
-                        qemu_set_fd_handler(s->usbip_client_fd, usbip_client_readable, NULL, s);
-                    }
-                    trace_s5l8702_usbotg_connected(1);
-                    s5l8702_usbotg_update_irq(s);
-                } else {
-                    s->enumeration_phase = 1;
-                    trace_s5l8702_usbotg_connected(0);
-                }
-            }
+            usbotg_maybe_start_enumeration(s);
 
             s5l8702_usbotg_update_irq(s);
             break;
@@ -1764,6 +1791,61 @@ static const MemoryRegionOps s5l8702_usbotg_ops = {
     .valid.max_access_size = 4,
 };
 
+/*
+ * Plug or unplug the dock connector.
+ *
+ * The only thing the PHY tells the firmware about a cable is VBUS, which
+ * shows up as GOTGCTL.BSesVld; everything downstream of that (the firmware
+ * enabling its pullup via DCTL, and this model then playing the part of the
+ * host) only happens once a cable is there. Unplugging tears the enumeration
+ * state down again so a later plug starts from scratch.
+ */
+static void s5l8702_usbotg_set_cable(S5L8702UsbOtgState *s, bool connected)
+{
+    if (s->usb_connected == connected) {
+        return;
+    }
+
+    s->usb_connected = connected;
+    trace_s5l8702_usbotg_cable(connected);
+    qemu_set_irq(s->cable_out, connected);
+
+    if (connected) {
+        s->gotgctl |= GOTGCTL_BSESSIONVALID;
+        s->gotgint |= (1 << 8);   /* SesReqSucStsChng */
+        /* The firmware usually applies its pullup once, early in boot, and
+         * leaves it there; plugging in afterwards is what a host would see,
+         * so start enumerating now rather than waiting for a DCTL write that
+         * is never coming. */
+        usbotg_maybe_start_enumeration(s);
+    } else {
+        s->gotgctl &= ~GOTGCTL_BSESSIONVALID;
+        s->gotgint |= (1 << 2);   /* SesEndDet */
+
+        /* Nothing on the bus any more: forget where enumeration got to, and
+         * drop a USB/IP client if one is still attached. */
+        s->enumeration_started = false;
+        s->enumeration_phase = 0;
+        s->gintsts_poll_count = 0;
+        if (s->usbip_client_fd >= 0) {
+            usbip_disconnect_impl(s, "cable unplugged");
+        }
+    }
+
+    s->gintsts |= (1 << 2);       /* OTG interrupt */
+    s5l8702_usbotg_update_irq(s);
+}
+
+static bool s5l8702_usbotg_get_connected(Object *obj, Error **errp)
+{
+    return S5L8702_USBOTG(obj)->usb_connected;
+}
+
+static void s5l8702_usbotg_set_connected(Object *obj, bool value, Error **errp)
+{
+    s5l8702_usbotg_set_cable(S5L8702_USBOTG(obj), value);
+}
+
 static void s5l8702_usbotg_reset(DeviceState *dev)
 {
     S5L8702UsbOtgState *s = S5L8702_USBOTG(dev);
@@ -1779,7 +1861,8 @@ static void s5l8702_usbotg_reset(DeviceState *dev)
      * This helps firmware know device is ready
      */
     s->dsts = (0 << 1) | 0;  /* High speed (0=HS, 1=FS), not suspended */
-    s->gotgctl = GOTGCTL_BSESSIONVALID;  /* B-session valid: firmware checks this after SETUP */
+    /* B-session valid means VBUS is present, i.e. a cable is plugged in. */
+    s->gotgctl = s->usb_connected ? GOTGCTL_BSESSIONVALID : 0;
     s->gotgint = 0;
     s->gintmsk = 0;
     s->gintsts = 0;
@@ -1883,9 +1966,24 @@ static void s5l8702_usbotg_init(Object *obj)
     sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
     sysbus_init_irq(SYS_BUS_DEVICE(obj), &s->irq);
 
+    /* Cable state, for anything else on the board that can see the dock
+     * connector -- on this SoC that is the PMU's power-source status. */
+    qdev_init_gpio_out_named(DEVICE(obj), &s->cable_out, "usb-power", 1);
+
     /* Initialize USB/IP fds to -1 before realize (reset also sets these) */
     s->usbip_listen_fd = -1;
     s->usbip_client_fd = -1;
+
+    /*
+     * Nothing is plugged in unless someone says so. Settable both before the
+     * machine starts (-global s5l8702-usbotg.usb-connected=on) and while it
+     * runs (qom-set /machine/soc/usbotg usb-connected true), which is what
+     * makes it a working stand-in for plugging the cable in and out.
+     */
+    s->usb_connected = false;
+    object_property_add_bool(obj, "usb-connected",
+                             s5l8702_usbotg_get_connected,
+                             s5l8702_usbotg_set_connected);
 }
 
 static void s5l8702_usbotg_realize(DeviceState *dev, Error **errp)

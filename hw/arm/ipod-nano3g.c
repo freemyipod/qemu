@@ -9,6 +9,7 @@
 #include "qom/object.h"
 #include "hw/arm/ipod-nano3g.h"
 #include "hw/qdev-properties.h"
+#include "hw/misc/d1671.h"
 #include "sysemu/reset.h"
 #include "trace.h"
 
@@ -163,7 +164,14 @@ static void ipod_nano3g_machine_init(MachineState *machine)
     qdev_connect_gpio_out(DEVICE(&s->soc.gpio), 0, flash_cs);
     
     /* PMU: D1671 */
-    i2c_slave_create_simple(s->soc.i2c[0].bus, TYPE_D1671, 0x73);
+    // The PMU reports the dock connector's power sources, so it has to see the cable going in and out
+    // along with the USB controller. Otherwise the firmware keeps showing "Connected" after an unplug.
+    DeviceState *pmu = DEVICE(i2c_slave_create_simple(s->soc.i2c[0].bus, TYPE_D1671, 0x73));
+    qemu_irq usb_power = qdev_get_gpio_in_named(pmu, "usb-power", 0);
+
+    qdev_connect_gpio_out_named(DEVICE(&s->soc.usbotg), "usb-power", 0, usb_power);
+    // The line only pulses on a change, and the starting state can already be "plugged in" from -global, so seed it here.
+    qemu_set_irq(usb_power, object_property_get_bool(OBJECT(&s->soc.usbotg), "usb-connected", &error_abort));
 
     /* Read the bootrom, copy it to memory and execute it */
     uint8_t *bootrom = NULL;

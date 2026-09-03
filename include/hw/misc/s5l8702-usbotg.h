@@ -195,6 +195,15 @@ struct S5L8702UsbOtgState {
     /* FIFOs */
     uint8_t fifos[USB_FIFO_SIZE];
 
+    /* Cable state. False = nothing plugged into the dock connector, so the
+     * PHY sees no VBUS: GOTGCTL.BSesVld stays clear and the model never
+     * fakes a host enumeration. Toggle it at runtime with
+     *   (qemu) qom-set /machine/soc/usbotg usb-connected true
+     * or from the command line with -global s5l8702-usbotg.usb-connected=on.
+     * A USB/IP client importing the device also implies a cable. */
+    bool usb_connected;
+    qemu_irq cable_out;   /* mirrors usb_connected to the rest of the board */
+
     /* For simulating USB enumeration */
     bool enumeration_started;
     int enumeration_phase;  /* 0=init, 1=reset injected, 2=setup ready */

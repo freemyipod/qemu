@@ -339,6 +339,7 @@ pcf5063x_unknown_write(uint8_t addr) "unknown write addr 0x%02x"
 # d1671.c
 d1671_read(const char *register_name, uint8_t addr, uint8_t value) "read %s (0x%02x): 0x%02x"
 d1671_write(uint8_t addr, uint8_t value) "write addr 0x%02x: 0x%02x"
+d1671_usb_power(bool present) "dock connector power present=%d"
 
 # s5l8702-clickwheel.c
 s5l8702_clickwheel_reset(void) "reset"
@@ -439,6 +440,7 @@ s5l8702_usbotg_unknown_cmd(uint32_t cmd) "usbip unknown command 0x%08x"
 s5l8702_usbotg_unlink(uint32_t seqnum, uint32_t target) "usbip CMD_UNLINK seqnum=0x%x target=0x%x"
 s5l8702_usbotg_recv_failed(size_t wanted, ssize_t got, int err) "usbip recv failed: wanted %zu got %zd errno=%d"
 s5l8702_usbotg_send_failed(size_t wanted, ssize_t got, int err) "usbip send failed: wanted %zu got %zd errno=%d"
+s5l8702_usbotg_cable(int connected) "USB cable connected=%d"
 s5l8702_usbotg_disconnect(const char *reason, int phase, int ep0_pending, int ep0_d2h, int ep0_status_pending, int inep_active) "usbip disconnect from %s (phase=%d ep0_pending=%d ep0_d2h=%d ep0_status_pending=%d inep_active=%d)"
 s5l8702_usbotg_ep0_setup(const char *dir, uint32_t b0, uint32_t b1, uint32_t b2, uint32_t b3, uint32_t b4, uint32_t b5, uint32_t b6, uint32_t b7) "EP0 SETUP %s %02x%02x%02x%02x%02x%02x%02x%02x"
 s5l8702_usbotg_ep0_data_in(uint32_t len) "EP0 -> host %u bytes [ctrl d2h]"
