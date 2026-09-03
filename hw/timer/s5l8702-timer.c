@@ -645,10 +645,8 @@ static void s5l8702_timer_tick(void *opaque) {
      * compare is the only thing that can define its period. Un-reloaded it is
      * a 32-bit wrap: one interrupt every 4295 seconds instead of every 10 ms.
      *
-     * DEFAULT OFF, because turning it on kills the machine: see the
-     * interrupt-acknowledge note on interval_reload in the header. Only INT0
-     * reloads, and only in interval mode -- one-shot already stopped itself on
-     * the overflow above, and capture mode does not own the counter.
+     * Only INT0 reloads, and only in interval mode -- one-shot already stopped
+     * itself on the overflow above, and capture mode does not own the counter.
      */
     if (t->ctrl->interval_reload && (t->sched_events & SCHED_EVT_INT0) &&
         (t->tcon & S5L8702_TIMER_TCON_MODE_SEL_MASK) ==
@@ -735,7 +733,7 @@ static void s5l8702_timer_init(Object *obj) {
 
 static Property s5l8702_timer_props[] = {
     DEFINE_PROP_BOOL("interval-reload", S5L8702TimerCtrlState, interval_reload,
-                     false),
+                     true),
     DEFINE_PROP_END_OF_LIST(),
 };
 

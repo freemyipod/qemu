@@ -3,6 +3,7 @@
 
 #include "qom/object.h"
 #include "hw/sysbus.h"
+#include "hw/misc/s5l8702-buscon.h"
 
 #define TYPE_S5L8702_MIU    "s5l8702-miu"
 OBJECT_DECLARE_SIMPLE_TYPE(S5L8702MiuState, S5L8702_MIU)
@@ -19,6 +20,9 @@ struct S5L8702MiuState {
     /*< public >*/
     MemoryRegion iomem;
     uint32_t regs[S5L8702_MIU_NUM_REGS];
+
+    /* Owned by the SoC; MIUCON's remap bit drives it. */
+    S5L8702BusConState *buscon;
 };
 
 #endif /* HW_MISC_S5L8702_MIU_H */

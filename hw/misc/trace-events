@@ -473,3 +473,8 @@ s5l8702_usbotg_out_stall_reject(uint32_t ep) "OUT EP%u STALL - completing URB wi
 s5l8702_usbotg_out_invalid_ep(uint32_t ep) "OUT request for invalid EP%u"
 s5l8702_usbotg_out_too_large(uint32_t ep, uint32_t len) "OUT EP%u data too large: %u"
 s5l8702_usbotg_out_double_pending(uint32_t ep) "OUT EP%u already has pending data"
+
+# s5l8702-buscon.c
+s5l8702_buscon_read(uint32_t offset, uint32_t val) "offset 0x%04x -> 0x%08x"
+s5l8702_buscon_write(uint32_t offset, uint32_t val) "offset 0x%04x <- 0x%08x"
+s5l8702_buscon_remap(uint32_t val, const char *view) "remap 0x%08x: address 0 is %s"

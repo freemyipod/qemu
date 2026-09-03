@@ -7,6 +7,16 @@
 
 #define REG_INDEX(offset) ((offset) / sizeof(uint32_t))
 
+/*
+ * MIUCON's bit 0 is the address-0 remap: with it set the CPU sees IRAM0 at 0
+ * instead of the BootROM, which is how firmware gets its own exception vectors
+ * installed (it builds them at 0x22000000 first). rockbox's miu_preinit()
+ * writes the same 0x1000100D on a nano 3G and documents the bit as
+ * "remap = 1 (IRAM mapped to 0x0)".
+ */
+#define S5L8702_MIUCON          0x00
+#define S5L8702_MIUCON_REMAP    BIT(0)
+
 static uint64_t s5l8702_miu_read(void *opaque, hwaddr offset, unsigned size) {
     const S5L8702MiuState *s = S5L8702_MIU(opaque);
     const uint32_t idx = REG_INDEX(offset);
@@ -22,6 +32,10 @@ static void s5l8702_miu_write(void *opaque, hwaddr offset, uint64_t value, unsig
 
     trace_s5l8702_miu_write((uint32_t)offset, (uint32_t)value);
     s->regs[idx] = (uint32_t)value;
+
+    if (offset == S5L8702_MIUCON) {
+        s5l8702_buscon_select(s->buscon, !!(value & S5L8702_MIUCON_REMAP));
+    }
 }
 
 static const MemoryRegionOps s5l8702_miu_ops = {

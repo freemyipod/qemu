@@ -26,6 +26,7 @@
 #include "hw/misc/s5l8702-sysic.h"
 #include "hw/dma/pl080.h"
 #include "hw/ide/s5l8702-ata.h"
+#include "hw/misc/s5l8702-buscon.h"
 
 #define TYPE_S5L8702    "s5l8702"
 OBJECT_DECLARE_SIMPLE_TYPE(S5L8702State, S5L8702)
@@ -75,6 +76,7 @@ struct S5L8702State {
     qemu_irq **irq;
     MemoryRegion brom;          // S5L8702_BOOTROM_BASE_ADDR
     MemoryRegion brom_alias;    // S5L8702_BASE_BOOT_ADDR
+    MemoryRegion iram0_alias;   // S5L8702_BASE_BOOT_ADDR, when remapped
     MemoryRegion iram0;         // S5L8702_IRAM0_BASE_ADDR
     MemoryRegion iram1;         // S5L8702_IRAM1_BASE_ADDR
     PL192State* vic0;
@@ -103,6 +105,7 @@ struct S5L8702State {
     S5L8702UsbOtgState usbotg;
     S5L8702UsbPhyState usbphy;
     S5L8702SysICState sysic;
+    S5L8702BusConState buscon;
     DeviceState* uart[4];
 };
 

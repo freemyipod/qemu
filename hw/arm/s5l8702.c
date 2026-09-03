@@ -79,6 +79,7 @@ static void s5l8702_init(Object *obj) {
     object_initialize_child(obj, "nand", &s->nand, TYPE_S5L8702_NAND);
     object_initialize_child(obj, "nand_ecc", &s->nand_ecc, TYPE_S5L8702_NAND_ECC);
     object_initialize_child(obj, "miu", &s->miu, TYPE_S5L8702_MIU);
+    object_initialize_child(obj, "buscon", &s->buscon, TYPE_S5L8702_BUSCON);
     object_initialize_child(obj, "usbotg", &s->usbotg, TYPE_S5L8702_USBOTG);
     object_initialize_child(obj, "usbphy", &s->usbphy, TYPE_S5L8702_USBPHY);
     object_initialize_child(obj, "sysic", &s->sysic, TYPE_S5L8702_SYSIC);
@@ -225,6 +226,16 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
     /* IRAM1 */
     memory_region_init_ram(&s->iram1, OBJECT(dev), "s5l8702.iram1", S5L8702_IRAM1_SIZE, &error_fatal);
     memory_region_add_subregion(system_memory, S5L8702_IRAM1_BASE_ADDR, &s->iram1);
+
+    /* Bus controller */
+    memory_region_init_alias(&s->iram0_alias, OBJECT(dev), "s5l8702.iram0-alias", &s->iram0, 0, S5L8702_IRAM0_SIZE);
+    memory_region_set_enabled(&s->iram0_alias, false);
+    memory_region_add_subregion(system_memory, S5L8702_BASE_BOOT_ADDR, &s->iram0_alias);
+    s->buscon.brom_alias = &s->brom_alias;
+    s->buscon.sram_alias = &s->iram0_alias;
+    sysbus_realize(SYS_BUS_DEVICE(&s->buscon), &error_fatal);
+    sysbus_mmio_map(SYS_BUS_DEVICE(&s->buscon), 0, S5L8702_BUSCON_BASE);
+    s->miu.buscon = &s->buscon;
 
     /* UART */
     exynos4210_uart_create(S5L8702_UART0_MEM_BASE, 256, 0, serial_hd(0), qdev_get_gpio_in(glue, S5L8702_IRQ_UART0));
