@@ -282,6 +282,7 @@ static void s5l8702_realize(DeviceState *dev, Error **errp) {
     create_unimplemented_device("unimplemented-mem", 0x0, 0xFFFFFFFF);
     create_unimplemented_device("wdt", 0x3c800000, 0x100000);
     create_unimplemented_device("sm1_div", 0x38501000, 0x04);
+    create_unimplemented_device("i2s", 0x3ca00000, 0x1000);
 }
 
 static void s5l8702_class_init(ObjectClass *oc, void *data)

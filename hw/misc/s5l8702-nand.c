@@ -132,6 +132,37 @@ static bool nand_fault_hits(S5L8702NandState *s, uint32_t bank, uint32_t block,
     return false;
 }
 
+/*
+ * DESTADDR is a QUEUE THAT SPANS PAGES, not a per-page list. The firmware
+ * programs one target per 2 KiB FMI sector and then pulls the pages one at a
+ * time, so a multi-page transfer arms many targets up front.
+ */
+static uint32_t s5l8702_nand_dest_targets(S5L8702NandState *s) {
+    uint32_t per_page = s->geo.bytes_per_page / NAND_SECTOR_SIZE;
+
+    if (per_page == 0) {
+        per_page = 1;
+    }
+    if (s->destaddr_queue_count == 0) {
+        /* Nothing queued (e.g. a part that did not re-arm): fall back to the
+         * last DESTADDR written, covering the whole page. */
+        s->destaddr_queue[0] = s->destaddr;
+        s->destaddr_queue_count = 1;
+        return 1;
+    }
+    return MIN(s->destaddr_queue_count, per_page);
+}
+
+static void s5l8702_nand_dest_consume(S5L8702NandState *s, uint32_t used) {
+    if (used >= s->destaddr_queue_count) {
+        s->destaddr_queue_count = 0;
+        return;
+    }
+    memmove(s->destaddr_queue, s->destaddr_queue + used,
+            (s->destaddr_queue_count - used) * sizeof(s->destaddr_queue[0]));
+    s->destaddr_queue_count -= used;
+}
+
 void s5l8702_nand_set_buffered_page(S5L8702NandState *s, uint32_t page) {
     int bank = get_bank(s);
     if (bank == -1) {
@@ -234,26 +265,19 @@ static void s5l8702_nand_do_program(S5L8702NandState *s) {
     }
     s->op_failed = false;
 
-    const uint32_t sector = NAND_SECTOR_SIZE;
-    uint32_t n = s->destaddr_queue_count;
-    if (n == 0) {
-        s->destaddr_queue[0] = s->destaddr;
-        n = 1;
-    }
+    uint32_t n = s5l8702_nand_dest_targets(s);
     for (uint32_t i = 0; i < n; i++) {
-        uint32_t off = i * sector;
-        if (off >= s->geo.bytes_per_page) {
-            break;
-        }
-        uint32_t len = sector;
-        /* DESTBUF auto-increments: the last queued source supplies the
-         * rest of the page (a single source == a whole-page transfer). */
+        uint32_t off = i * NAND_SECTOR_SIZE;
+        uint32_t len = NAND_SECTOR_SIZE;
+
+        /* DESTBUF auto-increments: the last source of this page supplies the
+         * rest of it (a single source == a whole-page transfer). */
         if (i == n - 1 || off + len > s->geo.bytes_per_page) {
             len = s->geo.bytes_per_page - off;
         }
         address_space_read(&address_space_memory, s->destaddr_queue[i] ^ 0x80000000, MEMTXATTRS_UNSPECIFIED, s->page_buffer + off, len);
     }
-    s->destaddr_queue_count = 0;
+    s5l8702_nand_dest_consume(s, n);
 
     qemu_mutex_lock(&s->lock);
     if (s->raw_ecc_layout) {
@@ -309,23 +333,14 @@ static uint64_t nand_mem_read(void *opaque, hwaddr addr, unsigned size) {
              * The firmware programs one DESTADDR per sector we must write
              * each sector to its own target rather than dumping the whole
              * page on the last one. */
-            const uint32_t sector = NAND_SECTOR_SIZE;
-            uint32_t n = s->destaddr_queue_count;
-            if (n == 0) {
-                /* No queued targets (e.g. a single-sector part that didn't
-                 * re-arm): fall back to the last DESTADDR. */
-                s->destaddr_queue[0] = s->destaddr;
-                n = 1;
-            }
+            uint32_t n = s5l8702_nand_dest_targets(s);
             for (uint32_t i = 0; i < n; i++) {
-                uint32_t off = i * sector;
-                if (off >= s->geo.bytes_per_page) {
-                    break;
-                }
-                uint32_t len = sector;
-                /* DESTBUF auto-increments: the last queued target receives
-                 * everything remaining in the page (the no-ECC read program
-                 * supplies a single target for the whole page). */
+                uint32_t off = i * NAND_SECTOR_SIZE;
+                uint32_t len = NAND_SECTOR_SIZE;
+
+                /* DESTBUF auto-increments: the last target of this page
+                 * receives everything remaining in it (the no-ECC read
+                 * program supplies a single target for the whole page). */
                 if (i == n - 1 || off + len > s->geo.bytes_per_page) {
                     len = s->geo.bytes_per_page - off;
                 }
@@ -334,7 +349,7 @@ static uint64_t nand_mem_read(void *opaque, hwaddr addr, unsigned size) {
                                     MEMTXATTRS_UNSPECIFIED,
                                     s->page_buffer + off, len);
             }
-            s->destaddr_queue_count = 0;
+            s5l8702_nand_dest_consume(s, n);
             trace_s5l8702_nand_reg_fifo_spare(0, s->page_spare_buffer.words[0]);
             return s->page_spare_buffer.words[0];
         }

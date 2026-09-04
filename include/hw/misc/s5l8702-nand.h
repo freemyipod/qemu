@@ -19,7 +19,9 @@
  * page size: the firmware supplies one destination (or source) address per
  * sector, and ECC status is reported per sector. */
 #define NAND_SECTOR_SIZE        0x800
-#define NAND_DESTADDR_QUEUE_LEN 16
+/* Deep enough for a whole multi-page transfer's worth of targets: the
+ * FAT32 free-cluster scan arms 64 of them (255 512-byte blocks). */
+#define NAND_DESTADDR_QUEUE_LEN 256
 
 /* Physical (on-media) ECC layout: see the "raw-ecc-layout" property.
  * A raw dump is not [data][spare]; the FMI's BCH engine stores each page as
